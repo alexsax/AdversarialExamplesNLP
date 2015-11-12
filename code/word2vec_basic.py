@@ -25,7 +25,7 @@ def maybe_download(filename, expected_bytes):
     raise Exception(
         'Failed to verify ' + filename + '. Can you get to it with a browser?')
   return filename
-filename = maybe_download('text8.zip', 31344016)
+filename = maybe_download('../data/text8.zip', 31344016)
 # Read the data into a string.
 def read_data(filename):
   f = zipfile.ZipFile(filename)
@@ -165,7 +165,7 @@ with tf.Session(graph=graph) as session:
   final_embeddings = normalized_embeddings.eval()
 
 
-output_file="../vectors.txt"
+output_file="../data/vectors.txt"
 def save_to_file(embedding_size, filename='vectors.txt'):
   print("Saving the file into " + filename)
   with open(filename, 'w') as f:
