@@ -1,4 +1,6 @@
-./data/*
-./models/*
+./data/*.w2v
+./data/*.txt
+./models/*.w2v
 ./code/*.txt
 *.txt
+*.w2v
