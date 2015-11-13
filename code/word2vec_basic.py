@@ -34,8 +34,10 @@ def read_data(filename):
   f.close()
 words = read_data(filename)
 print('Data size', len(words))
+print(words[:10])
 # Step 2: Build the dictionary and replace rare words with UNK token.
 vocabulary_size = 50000
+corpus_size = 100000
 def build_dataset(words):
   count = [['UNK', -1]]
   count.extend(collections.Counter(words).most_common(vocabulary_size - 1))
@@ -44,7 +46,8 @@ def build_dataset(words):
     dictionary[word] = len(dictionary)
   data = list()
   unk_count = 0
-  for word in words:
+  for i,word in enumerate(words):
+    if i >= corpus_size: break
     if word in dictionary:
       index = dictionary[word]
     else:
@@ -59,34 +62,53 @@ del words  # Hint to reduce memory.
 print('Most common words (+UNK)', count[:5])
 print('Sample data', data[:10])
 data_index = 0
+
+
 # Step 4: Function to generate a training batch for the skip-gram model.
 def generate_batch(batch_size, num_skips, skip_window):
   global data_index
   assert batch_size % num_skips == 0
   assert num_skips <= 2 * skip_window
-  batch = np.ndarray(shape=(batch_size), dtype=np.int32)
+  batch = np.ndarray(shape=(batch_size, num_skips), dtype=np.int32)
   labels = np.ndarray(shape=(batch_size, 1), dtype=np.int32)
   span = 2 * skip_window + 1 # [ skip_window target skip_window ]
   buffer = collections.deque(maxlen=span)
   for _ in range(span):
     buffer.append(data[data_index])
     data_index = (data_index + 1) % len(data)
-  for i in range(batch_size // num_skips):
+
+  # For generating a CBOW batch
+  for i in range(batch_size):
     target = skip_window  # target label at the center of the buffer
-    targets_to_avoid = [ skip_window ]
+    targets_to_avoid = [ skip_window ] # avoid label at center index
+    labels[i] = buffer[skip_window]
     for j in range(num_skips):
       while target in targets_to_avoid:
         target = random.randint(0, span - 1)
       targets_to_avoid.append(target)
-      batch[i * num_skips + j] = buffer[skip_window]
-      labels[i * num_skips + j, 0] = buffer[target]
+      batch[i, j] = buffer[target]
     buffer.append(data[data_index])
     data_index = (data_index + 1) % len(data)
+      # For generating a SG batch
+  # for i in range(batch_size // num_skips):
+  #   target = skip_window  # target label at the center of the buffer
+  #   targets_to_avoid = [ skip_window ] # avoid label at center index
+  #   for j in range(num_skips):
+  #     while target in targets_to_avoid:
+  #       target = random.randint(0, span - 1)
+  #     targets_to_avoid.append(target)
+  #     batch[i * num_skips + j] = buffer[skip_window]
+  #     labels[i * num_skips + j, 0] = buffer[target]
+    # buffer.append(data[data_index])
+    # data_index = (data_index + 1) % len(data)
   return batch, labels
 batch, labels = generate_batch(batch_size=8, num_skips=2, skip_window=1)
+def get_context(indices):
+  return " ".join([reverse_dictionary[index] for index in indices])
+
 for i in range(8):
   print(batch[i], '->', labels[i, 0])
-  print(reverse_dictionary[batch[i]], '->', reverse_dictionary[labels[i, 0]])
+  print(get_context(batch[i]), '->', reverse_dictionary[labels[i, 0]])
 # Step 5: Build and train a skip-gram model.
 batch_size = 128
 embedding_size = 128  # Dimension of the embedding vector.
@@ -102,8 +124,8 @@ num_sampled = 64    # Number of negative examples to sample.
 graph = tf.Graph()
 with graph.as_default():
   # Input data.
-  train_inputs = tf.placeholder(tf.int32, shape=[batch_size])
-  train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
+  train_inputs = tf.placeholder(tf.int32, shape=[batch_size*num_skips], name="train_inputs") # one option is to do reshapes
+  train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1], name="train_labels")
   valid_dataset = tf.constant(valid_examples, dtype=tf.int32)
   # Construct the variables.
   embeddings = tf.Variable(
@@ -113,7 +135,11 @@ with graph.as_default():
                           stddev=1.0 / math.sqrt(embedding_size)))
   nce_biases = tf.Variable(tf.zeros([vocabulary_size]))
   # Look up embeddings for inputs.
-  embed = tf.nn.embedding_lookup(embeddings, train_inputs)
+
+  embed = tf.nn.embedding_lookup(embeddings, train_inputs) # now sum over
+  embed = tf.reshape(embed, [batch_size, num_skips, embedding_size])
+  embed = tf.reduce_sum(embed, 1)
+
   # Compute the average NCE loss for the batch.
   # tf.nce_loss automatically draws a new sample of the negative labels each
   # time we evaluate the loss.
@@ -139,6 +165,7 @@ with tf.Session(graph=graph) as session:
   for step in xrange(num_steps):
     batch_inputs, batch_labels = generate_batch(
         batch_size, num_skips, skip_window)
+    batch_inputs = np.reshape(batch_inputs, batch_size*num_skips)
     feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
     # We perform one update step by evaluating the optimizer op (including it
     # in the list of returned values for session.run()
