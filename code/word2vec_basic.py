@@ -2,6 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 import tensorflow.python.platform
+from tensorflow.python.ops import gradients
 import collections
 import math
 import numpy as np
@@ -34,10 +35,9 @@ def read_data(filename):
   f.close()
 words = read_data(filename)
 print('Data size', len(words))
-print(words[:10])
 # Step 2: Build the dictionary and replace rare words with UNK token.
 vocabulary_size = 50000
-corpus_size = 100000
+corpus_size = 1000000
 def build_dataset(words):
   count = [['UNK', -1]]
   count.extend(collections.Counter(words).most_common(vocabulary_size - 1))
@@ -89,18 +89,6 @@ def generate_batch(batch_size, num_skips, skip_window):
       batch[i, j] = buffer[target]
     buffer.append(data[data_index])
     data_index = (data_index + 1) % len(data)
-      # For generating a SG batch
-  # for i in range(batch_size // num_skips):
-  #   target = skip_window  # target label at the center of the buffer
-  #   targets_to_avoid = [ skip_window ] # avoid label at center index
-  #   for j in range(num_skips):
-  #     while target in targets_to_avoid:
-  #       target = random.randint(0, span - 1)
-  #     targets_to_avoid.append(target)
-  #     batch[i * num_skips + j] = buffer[skip_window]
-  #     labels[i * num_skips + j, 0] = buffer[target]
-    # buffer.append(data[data_index])
-    # data_index = (data_index + 1) % len(data)
   return batch, labels
 batch, labels = generate_batch(batch_size=8, num_skips=2, skip_window=1)
 def get_context(indices):
@@ -111,7 +99,7 @@ for i in range(8):
   print(get_context(batch[i]), '->', reverse_dictionary[labels[i, 0]])
 # Step 5: Build and train a skip-gram model.
 batch_size = 128
-embedding_size = 128  # Dimension of the embedding vector.
+embedding_size = 25  # Dimension of the embedding vector.
 skip_window = 1       # How many words to consider left and right.
 num_skips = 2         # How many times to reuse an input to generate a label.
 # We pick a random validation set to sample nearest neighbors. Here we limit the
@@ -136,8 +124,8 @@ with graph.as_default():
   nce_biases = tf.Variable(tf.zeros([vocabulary_size]))
   # Look up embeddings for inputs.
 
-  embed = tf.nn.embedding_lookup(embeddings, train_inputs) # now sum over
-  embed = tf.reshape(embed, [batch_size, num_skips, embedding_size])
+  curr_embedding = tf.nn.embedding_lookup(embeddings, train_inputs) # now sum over
+  embed = tf.reshape(curr_embedding, [batch_size, num_skips, embedding_size])
   embed = tf.reduce_sum(embed, 1)
 
   # Compute the average NCE loss for the batch.
@@ -146,8 +134,13 @@ with graph.as_default():
   loss = tf.reduce_mean(
       tf.nn.nce_loss(nce_weights, nce_biases, embed, train_labels,
                      num_sampled, vocabulary_size))
+
   # Construct the SGD optimizer using a learning rate of 1.0.
-  optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
+  # optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
+  opt = tf.train.GradientDescentOptimizer(1.0)
+  grads_and_vars = opt.compute_gradients(loss)
+  optimizer = opt.apply_gradients(grads_and_vars)
+
   # Compute the cosine similarity between minibatch examples and all embeddings.
   norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
   normalized_embeddings = embeddings / norm
@@ -156,7 +149,7 @@ with graph.as_default():
   similarity = tf.matmul(
       valid_embeddings, normalized_embeddings, transpose_b=True)
 # Step 6: Begin training
-num_steps = 100001
+num_steps = 2001#100001
 with tf.Session(graph=graph) as session:
   # We must initialize all variables before we use them.
   tf.initialize_all_variables().run()
@@ -170,6 +163,18 @@ with tf.Session(graph=graph) as session:
     # We perform one update step by evaluating the optimizer op (including it
     # in the list of returned values for session.run()
     _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
+
+
+    # print(lossGradResult)
+
+    # grad = session.run([postEmbed], feed_dict=feed_dict)
+
+    
+    # postgrad = session.run([tf.stop_gradient(noPropLoss)], feed_dict=feed_dict)
+    # print(postEmbed)
+    # print(grad)
+    # postgrad = session.run([postLoss], feed_dict=feed_dict)
+    # print(postgrad)
     average_loss += loss_val
     if step % 2000 == 0:
       if step > 0:
@@ -182,16 +187,63 @@ with tf.Session(graph=graph) as session:
       sim = similarity.eval()
       for i in xrange(valid_size):
         valid_word = reverse_dictionary[valid_examples[i]]
-        top_k = 8 # number of nearest neighbors
-        nearest = (-sim[i, :]).argsort()[1:top_k+1]
+        def nearest_neighbors(idx, top_k=8):
+          return (-sim[idx, :]).argsort()[1:top_k+1]
+        top_k = 8
+        nearest = nearest_neighbors(i)
         log_str = "Nearest to %s:" % valid_word
         for k in xrange(top_k):
           close_word = reverse_dictionary[nearest[k]]
           log_str = "%s %s," % (log_str, close_word)
         print(log_str)
+      # Gradient - I think
+      # I'm reasonably sure that this is the method by which we can set up and
+      # evaluating a gradient without also doing backpropogation and updating 
+      # the entire NN.
+
+      lossGrad = tf.stop_gradient(gradients.gradients(loss, embed)[0])
+      # Pick a word that we want to turn everything into
+      adversarial_labels = np.array([valid_examples[1]]*batch_size)
+      adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
+      adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
+
+      [real_grad] = session.run([lossGrad], feed_dict=feed_dict)
+      [adversarial_grad] = session.run([lossGrad], feed_dict=adversarial_feed_dict)
+
+      eta = 0.01
+      eps = 0.01
+
+      [batch_embeddings] = session.run([tf.stop_gradient(embed)], feed_dict=feed_dict)
+
+      adversarial_inputs = batch_embeddings - eta*real_grad + eps*adversarial_grad
+      print("ADVERSARIAL")
+      print(adversarial_inputs.shape)
+      current_embeddings = normalized_embeddings.eval()
+
+      [perturbed_embeddings] = session.run([tf.stop_gradient(curr_embedding)], feed_dict=feed_dict)
+      print("PERTURBED")
+      print(perturbed_embeddings.shape)
+
+      for skip_num in xrange(num_skips):
+        perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_inputs
+
+      # adversarial_similarity_part = np.dot(current_embeddings, adversarial_inputs.T)
+      context_similarity_part = np.dot(current_embeddings, perturbed_embeddings.T)
+      print("Finding NN")
+      adversarial_batch_input = np.zeros([batch_size, num_skips])
+      for i in xrange(batch_size):
+        for j in xrange(num_skips):
+          adversarial_batch_input[i][j] = (context_similarity_part[:, j*batch_size + i]).argmax()
+
+      print("Found NN")
+      adversarial_batch_input = np.reshape(batch_inputs, batch_size*num_skips)
+      adversarial_inputs_dict = {train_inputs : adversarial_batch_input, train_labels : adversarial_labels}
+      loss_results = session.run([lossGrad], feed_dict=adversarial_inputs_dict)
+
   final_embeddings = normalized_embeddings.eval()
 
 
+# Step 7: Save the embeddings
 output_file="../data/vectors.txt"
 def save_to_file(embedding_size, filename='vectors.txt'):
   print("Saving the file into " + filename)
@@ -202,9 +254,9 @@ def save_to_file(embedding_size, filename='vectors.txt'):
       f.write(rowstring)
   os.system('head -n 2 '+ filename)
 
-save_to_file(embedding_size, output_file)
+# save_to_file(embedding_size, output_file)
 
-# Step 7: Visualize the embeddings.
+# Step 8: Visualize the embeddings.
 def plot_with_labels(low_dim_embs, labels, filename='tsne.png'):
   assert low_dim_embs.shape[0] >= len(labels), "More labels than embeddings"
   plt.figure(figsize=(18, 18))  #in inches
@@ -218,13 +270,15 @@ def plot_with_labels(low_dim_embs, labels, filename='tsne.png'):
                  ha='right',
                  va='bottom')
   plt.savefig(filename)
-try:
-  from sklearn.manifold import TSNE
-  import matplotlib.pyplot as plt
-  tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000)
-  plot_only = 500
-  low_dim_embs = tsne.fit_transform(final_embeddings[:plot_only,:])
-  labels = list(dictionary.keys())[:plot_only]
-  plot_with_labels(low_dim_embs, labels)
-except ImportError:
-  print("Please install sklearn and matplotlib to visualize embeddings.")
+# try:
+#   from sklearn.manifold import TSNE
+#   import matplotlib.pyplot as plt
+#   tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000)
+#   plot_only = 500
+#   low_dim_embs = tsne.fit_transform(final_embeddings[:plot_only,:])
+#   labels = list(dictionary.keys())[:plot_only]
+#   plot_with_labels(low_dim_embs, labels)
+# except ImportError:
+#   print("Please install sklearn and matplotlib to visualize embeddings.")
+
+# Step 9: Generate adversarial examples
