@@ -204,7 +204,7 @@ with tf.Session(graph=graph) as session:
       real_grad = lossGrad.eval(feed_dict)
 
       # Pick a word that we want to turn everything into
-      adversarial_labels = np.array([valid_examples[1]]*batch_size)
+      adversarial_labels = np.array([valid_examples[2]]*batch_size)
       adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
       adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
 
@@ -213,7 +213,7 @@ with tf.Session(graph=graph) as session:
       adversarial_grad = lossGrad.eval(adversarial_feed_dict)
 
       eta = 0.001
-      eps = 0.001
+      eps = 250.001
 
       # How to turn one word vector into another
       adversarial_perturbation =  eta*real_grad - eps*adversarial_grad
@@ -228,18 +228,31 @@ with tf.Session(graph=graph) as session:
 
       for skip_num in xrange(num_skips):
         perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_perturbation
-
       # Find most similar words to new embeddings
-      current_embeddings = normalized_embeddings.eval()
-      peturbed_similarity_matrix = np.dot(current_embeddings, perturbed_embeddings.T)
+      current_embeddings = normalized_embeddings.eval() # Shape: vocab_size, embedding_size
+      peturbed_similarity_matrix = np.dot(current_embeddings, perturbed_embeddings.T) # Shape
       print("Finding Nearest Neighbors")
       adversarial_word_vectors = np.zeros([batch_size, num_skips])
       for i in xrange(batch_size):
         for j in xrange(num_skips):
           adversarial_word_vectors[i][j] = (peturbed_similarity_matrix[:, j*batch_size + i]).argmax()
+          # print((sorted(-peturbed_similarity_matrix[:, j*batch_size + i]))[0:10])
 
       print("Found Nearest Neighbors")
-      adversarial_word_vectors = np.reshape(adversarial_word_vectors, batch_size*num_skips)
+      adversarial_word_vectors = np.reshape(adversarial_word_vectors.T, batch_size*num_skips)
+
+      def print_old_and_adversarial_contexts():
+        for i in xrange(batch_size):
+          for j in xrange(num_skips):
+            print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
+          print(" -> ", end="")
+          for j in xrange(num_skips):
+            print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
+          print("")
+        print(reverse_dictionary[valid_examples[2]])
+
+      print_old_and_adversarial_contexts()
+
       adversarial_inputs_dict = {train_inputs : adversarial_word_vectors, train_labels : adversarial_labels}
       loss_results = session.run([lossGrad], feed_dict=adversarial_inputs_dict)[0]
       print(len(loss_results))
