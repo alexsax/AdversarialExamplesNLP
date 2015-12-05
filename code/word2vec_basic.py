@@ -150,107 +150,121 @@ with graph.as_default():
   similarity = tf.matmul(
       valid_embeddings, normalized_embeddings, transpose_b=True)
   lossGrad = gradients.gradients(loss, embed)[0]
+  print('initializing saver')
+  variables_to_save = {'embeddings':embeddings, 'nce_weights' : nce_weights, 'nce_biases' : nce_biases}
+  saver = tf.train.Saver(variables_to_save)
 
 # Step 6: Begin training
 num_steps = 100001
+
+# The path where previously stored models are saved. Set to "" to retrain from scratch
+existing_graph_path = "my-model-100000"
+
 with tf.Session(graph=graph) as session:
-  # We must initialize all variables before we use them.
-  tf.initialize_all_variables().run()
-  print("Initialized")
-  average_loss = 0
-  post_adversarial_avg_loss = 0
-  for step in xrange(num_steps):
-    batch_inputs, batch_labels = generate_batch(
-        batch_size, num_skips, skip_window)
-    batch_inputs = np.reshape(batch_inputs, batch_size*num_skips)
-    feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
-    # We perform one update step by evaluating the optimizer op (including it
-    # in the list of returned values for session.run()
-    _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
+  if (existing_graph_path != ""):
+    saver.restore(session, 'my-model-100000')
+    final_embeddings = embeddings.eval()
+  else:
+    # We must initialize all variables before we use them.
+    tf.initialize_all_variables().run()
+    print("Initialized")
+    average_loss = 0
+    post_adversarial_avg_loss = 0
+    for step in xrange(num_steps):
+      batch_inputs, batch_labels = generate_batch(
+          batch_size, num_skips, skip_window)
+      batch_inputs = np.reshape(batch_inputs, batch_size*num_skips)
+      feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
+      # We perform one update step by evaluating the optimizer op (including it
+      # in the list of returned values for session.run()
+      _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
 
 
 
-    average_loss += loss_val
-    if step % 500 == 0:
-      if step > 0:
-        average_loss = average_loss / 500
-      # The average loss is an estimate of the loss over the last 2000 batches.
-      print("Average loss at step ", step, ": ", average_loss)
-      average_loss = 0
-    # note that this is expensive (~20% slowdown if computed every 500 steps)
-    if step % 10000 == 0:
-      def print_similarities_to_valid_examples():
-        sim = similarity.eval()
-        for i in xrange(valid_size):
-          valid_word = reverse_dictionary[valid_examples[i]]
-          def nearest_neighbors(idx, top_k=8):
-            return (-sim[idx, :]).argsort()[1:top_k+1]
-          top_k = 8
-          nearest = nearest_neighbors(i)
-          log_str = "Nearest to %s:" % valid_word
-          for k in xrange(top_k):
-            close_word = reverse_dictionary[nearest[k]]
-            log_str = "%s %s," % (log_str, close_word)
-          print(log_str)
-      print_similarities_to_valid_examples()
+      average_loss += loss_val
+      if step % 500 == 0:
+        if step > 0:
+          average_loss = average_loss / 500
+        # The average loss is an estimate of the loss over the last 2000 batches.
+        print("Average loss at step ", step, ": ", average_loss)
+        average_loss = 0
+      # note that this is expensive (~20% slowdown if computed every 500 steps)
+      if step % 10000 == 0:
+        def print_similarities_to_valid_examples():
+          sim = similarity.eval()
+          for i in xrange(valid_size):
+            valid_word = reverse_dictionary[valid_examples[i]]
+            def nearest_neighbors(idx, top_k=8):
+              return (-sim[idx, :]).argsort()[1:top_k+1]
+            top_k = 8
+            nearest = nearest_neighbors(i)
+            log_str = "Nearest to %s:" % valid_word
+            for k in xrange(top_k):
+              close_word = reverse_dictionary[nearest[k]]
+              log_str = "%s %s," % (log_str, close_word)
+            print(log_str)
+            print('saving session')
+            # saver.save(session, 'my-model', global_step=step)
+        print_similarities_to_valid_examples()
 
 
-      # Gradient - I think
-      # I'm reasonably sure that this is the method by which we can set up and
-      # evaluating a gradient without also doing backpropogation and updating 
-      # the entire NN.
-      # lossGrad = tf.stop_gradient(gradients.gradients(loss, embed)[0])
+        # Gradient - I think
+        # I'm reasonably sure that this is the method by which we can set up and
+        # evaluating a gradient without also doing backpropogation and updating 
+        # the entire NN.
+        # lossGrad = tf.stop_gradient(gradients.gradients(loss, embed)[0])
 
-      real_grad = lossGrad.eval(feed_dict)
+        real_grad = lossGrad.eval(feed_dict)
 
-      # Pick a word that we want to turn everything into
-      adversarial_labels = np.array([valid_examples[1]]*batch_size)
-      adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
-      adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
-
-
-      # real_grad = lossGrad.eval(feed_dict)
-      adversarial_grad = lossGrad.eval(adversarial_feed_dict)
-
-      eta = 0.001
-      eps = 0.001
-
-      # How to turn one word vector into another
-      adversarial_perturbation =  eta*real_grad - eps*adversarial_grad
-      print("ADVERSARIAL PERTURBATION")
-      print(adversarial_perturbation.shape)
+        # Pick a word that we want to turn everything into
+        adversarial_labels = np.array([valid_examples[1]]*batch_size)
+        adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
+        adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
 
 
-      # Embed contexts in the vector space and add the adversarial_perturbation
-      [perturbed_embeddings] = session.run([tf.stop_gradient(curr_embedding)], feed_dict=feed_dict)
-      print("PERTURBED")
-      print(perturbed_embeddings.shape)
+        # real_grad = lossGrad.eval(feed_dict)
+        adversarial_grad = lossGrad.eval(adversarial_feed_dict)
 
-      for skip_num in xrange(num_skips):
-        perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_perturbation
+        eta = 0.001
+        eps = 0.001
 
-      # Find most similar words to new embeddings
-      current_embeddings = normalized_embeddings.eval()
-      peturbed_similarity_matrix = np.dot(current_embeddings, perturbed_embeddings.T)
-      print("Finding Nearest Neighbors")
-      adversarial_word_vectors = np.zeros([batch_size, num_skips])
-      for i in xrange(batch_size):
-        for j in xrange(num_skips):
-          adversarial_word_vectors[i][j] = (peturbed_similarity_matrix[:, j*batch_size + i]).argmax()
-
-      print("Found Nearest Neighbors")
-      adversarial_word_vectors = np.reshape(adversarial_word_vectors, batch_size*num_skips)
-      adversarial_inputs_dict = {train_inputs : adversarial_word_vectors, train_labels : adversarial_labels}
-      loss_results = session.run([lossGrad], feed_dict=adversarial_inputs_dict)[0]
-      print(len(loss_results))
-      for row in loss_results:
-        norm = np.linalg.norm(row)
-        if norm < 0.001:
-          print(norm)
-          print(row)
+        # How to turn one word vector into another
+        adversarial_perturbation =  eta*real_grad - eps*adversarial_grad
+        print("ADVERSARIAL PERTURBATION")
+        print(adversarial_perturbation.shape)
 
 
-  final_embeddings = normalized_embeddings.eval()
+        # Embed contexts in the vector space and add the adversarial_perturbation
+        [perturbed_embeddings] = session.run([tf.stop_gradient(curr_embedding)], feed_dict=feed_dict)
+        print("PERTURBED")
+        print(perturbed_embeddings.shape)
+
+        for skip_num in xrange(num_skips):
+          perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_perturbation
+
+        # Find most similar words to new embeddings
+        current_embeddings = normalized_embeddings.eval()
+        peturbed_similarity_matrix = np.dot(current_embeddings, perturbed_embeddings.T)
+        print("Finding Nearest Neighbors")
+        adversarial_word_vectors = np.zeros([batch_size, num_skips])
+        for i in xrange(batch_size):
+          for j in xrange(num_skips):
+            adversarial_word_vectors[i][j] = (peturbed_similarity_matrix[:, j*batch_size + i]).argmax()
+
+
+        print("Found Nearest Neighbors")
+        adversarial_word_vectors = np.reshape(adversarial_word_vectors, batch_size*num_skips)
+        adversarial_inputs_dict = {train_inputs : adversarial_word_vectors, train_labels : adversarial_labels}
+        loss_results = session.run([lossGrad], feed_dict=adversarial_inputs_dict)[0]
+        print(len(loss_results))
+        for row in loss_results:
+          norm = np.linalg.norm(row)
+          if norm < 0.001:
+            print(norm)
+            print(row)
+
+
+    final_embeddings = normalized_embeddings.eval()
 
 
 # Step 7: Save the embeddings
