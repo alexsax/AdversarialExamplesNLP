@@ -17,9 +17,9 @@ import cPickle as pickle
 url = 'http://mattmahoney.net/dc/'
 
 # The path where previously stored models are saved. Set to "" to retrain from scratch
-existing_graph_path = "my-model-100000"
+existing_graph_path = ""#"my-model-80000"
 existing_auxiliary_graph_path = "../data/text8"
-num_steps = 100001
+num_steps = 10001
 
 
 def maybe_download(filename, expected_bytes):
@@ -41,9 +41,10 @@ def read_data(filename):
   for name in f.namelist():
     return f.read(name).split()
   f.close()
-vocabulary_size = 50000
+vocabulary_size = 30000
 if not existing_graph_path:
   words = read_data(filename)
+  # words = words[0:128*10001]
   print('Data size', len(words))
   # Step 2: Build the dictionary and replace rare words with UNK token.
   def build_dataset(words):
@@ -54,7 +55,7 @@ if not existing_graph_path:
       dictionary[word] = len(dictionary)
     data = list()
     unk_count = 0
-    for i,word in enumerate(words):
+    for i, word in enumerate(words):
       if word in dictionary:
         index = dictionary[word]
       else:
@@ -152,8 +153,11 @@ with graph.as_default():
   # Look up embeddings for inputs.
 
   curr_embedding = tf.nn.embedding_lookup(embeddings, train_inputs) # now sum over
-  embed = tf.reshape(curr_embedding, [batch_size, num_skips, embedding_size])
-  embed = tf.reduce_sum(embed, 1)
+
+  embed = tf.reshape(curr_embedding, [num_skips, batch_size, embedding_size ]) # NEW
+  embed = tf.reduce_sum(embed, 0)
+  # embed = tf.reshape(curr_embedding, [batch_size, num_skips, embedding_size]) # OLD
+  # embed = tf.reduce_sum(embed, 1)
 
   # Compute the average NCE loss for the batch.
   # tf.nce_loss automatically draws a new sample of the negative labels each
@@ -162,11 +166,6 @@ with graph.as_default():
       tf.nn.nce_loss(nce_weights, nce_biases, embed, train_labels,
                      num_sampled, vocabulary_size))
 
-  # Construct the SGD optimizer using a learning rate of 1.0.
-  # optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
-  opt = tf.train.AdamOptimizer(0.007)
-  grads_and_vars = opt.compute_gradients(loss)
-  optimizer = opt.apply_gradients(grads_and_vars)
 
   # Compute the cosine similarity between minibatch examples and all embeddings.
   norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
@@ -179,6 +178,14 @@ with graph.as_default():
   new_loss = alpha*loss + (1-alpha)*tf.reduce_mean(
       tf.nn.nce_loss(nce_weights, nce_biases, embed + eta*lossGrad, train_labels,
                      num_sampled, vocabulary_size))
+
+  # Construct the SGD optimizer using a learning rate of 1.0.
+  # optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
+  opt = tf.train.GradientDescentOptimizer(0.025)
+  # grads_and_vars = opt.compute_gradients(new_loss)
+  grads_and_vars = opt.compute_gradients(loss)
+  optimizer = opt.apply_gradients(grads_and_vars)
+
   print('initializing saver')
   variables_to_save = {'embeddings':embeddings, 
                         'nce_weights' : nce_weights, 
@@ -188,7 +195,7 @@ with graph.as_default():
                         # 'dictionary' : dictionary,
                         # 'data' : data
                         # }
-  saver = tf.train.Saver(variables_to_save)# Construct the neural netword graph
+  saver = tf.train.Saver(variables_to_save)# Construct the neural network graph
 
 # Step 6: Begin training
 
@@ -285,8 +292,6 @@ with tf.Session(graph=graph) as session:
       # in the list of returned values for session.run()
       _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
 
-
-
       average_loss += loss_val
       if step % 500 == 0:
         if step > 0:
@@ -309,8 +314,8 @@ with tf.Session(graph=graph) as session:
               close_word = reverse_dictionary[nearest[k]]
               log_str = "%s %s," % (log_str, close_word)
             print(log_str)
-            print('saving session')
-            # saver.save(session, 'my-model', global_step=step)
+        print('saving session')
+        saver.save(session, 'my-model', global_step=step)
         print_similarities_to_valid_examples()
   final_embeddings = normalized_embeddings.eval()
 
@@ -326,7 +331,7 @@ def save_to_file(embedding_size, filename='vectors.txt'):
       f.write(rowstring)
   os.system('head -n 2 '+ filename)
 
-# save_to_file(embedding_size, output_file)
+save_to_file(embedding_size, output_file)
 
 # Step 8: Visualize the embeddings.
 def plot_with_labels(low_dim_embs, labels, filename='tsne.png'):
