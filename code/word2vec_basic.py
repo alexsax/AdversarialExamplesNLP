@@ -17,10 +17,14 @@ import cPickle as pickle
 url = 'http://mattmahoney.net/dc/'
 
 # The path where previously stored models are saved. Set to "" to retrain from scratch
-existing_graph_path = ""#"my-model-80000"
+existing_graph_path = "my-model-100000"
 existing_auxiliary_graph_path = "../data/text8"
-num_steps = 10001
+num_steps = 100001
 
+# Variables that control generating adversarial examples
+min_number_modified = 25
+step_size = 0.01
+initial_step_value = 66
 
 def maybe_download(filename, expected_bytes):
   """Download a file if not present, and make sure it's the right size."""
@@ -134,8 +138,8 @@ valid_examples = np.array(random.sample(np.arange(valid_window), valid_size))
 num_sampled = 64    # Number of negative examples to sample.
 
 alpha = 0.5 # Interpolation constant for loss
-eta = 0.001 # Adversarial examples: move away from correct
-eps = 0.001 # Adversarial examples : move towards incorrect
+eta = initial_step_value #0.001 # Adversarial examples: move away from correct
+eps = initial_step_value #0.001 # Adversarial examples : move towards incorrect
 graph = tf.Graph()
 with graph.as_default():
   tf.set_random_seed(1337)
@@ -206,77 +210,141 @@ with tf.Session(graph=graph) as session:
     final_embeddings = embeddings.eval()
     print("Loaded - generating examples")
 
-    batch_inputs, batch_labels = generate_batch(
-    batch_size, num_skips, skip_window)
-    batch_inputs = np.reshape(batch_inputs.T, batch_size*num_skips)
-    feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
-    # Gradient - I think
-    # I'm reasonably sure that this is the method by which we can set up and
-    # evaluating a gradient without also doing backpropogation and updating 
-    # the entire NN.
-    # lossGrad = tf.stop_gradient(gradients.gradients(loss, embed)[0])
+    alternate = True
+    while (True):
+      if(alternate):
+        alternate = False
+        eta  += step_size
+      else:
+        alternate = True
+        eps += step_size
+      print("eta: " + str(eta))
+      print("eps: " + str(eps))
+      num_examples_modified = 0
 
-    real_grad = lossGrad.eval(feed_dict)
-
-    # Pick a word that we want to turn everything into
-    adversarial_labels = np.array([valid_examples[2]]*batch_size)
-    adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
-    adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
-
-
-    # real_grad = lossGrad.eval(feed_dict)
-    adversarial_grad = np.sign(lossGrad.eval(adversarial_feed_dict))
-    print(real_grad)
-    print(adversarial_grad)
-    # How to turn one word vector into another
-    adversarial_perturbation =  eta*real_grad - eps*adversarial_grad
-    print("ADVERSARIAL PERTURBATION")
-    print(adversarial_perturbation.shape)
+      batch_inputs, batch_labels = generate_batch(
+      batch_size, num_skips, skip_window)
+      batch_inputs = np.reshape(batch_inputs.T, batch_size*num_skips)
+      feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
+      # Gradient - I think
+      # I'm reasonably sure that this is the method by which we can set up and
+      # evaluating a gradient without also doing backpropogation and updating 
+      # the entire NN.
+      # lossGrad = tf.stop_gradient(gradients.gradients(loss, embed)[0])
 
 
-    # Embed contexts in the vector space and add the adversarial_perturbation
-    [perturbed_embeddings] = session.run([tf.stop_gradient(curr_embedding)], feed_dict=feed_dict)
-    print("PERTURBED")
-    print(perturbed_embeddings.shape)
+      real_grad = lossGrad.eval(feed_dict)
 
-    for skip_num in xrange(num_skips):
-      perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_perturbation
-    print(perturbed_embeddings)
-    # Find most similar words to new embeddings
-    current_embeddings = normalized_embeddings.eval() # Shape: vocab_size, embedding_size
-    peturbed_similarity_matrix = np.dot(current_embeddings, perturbed_embeddings.T) # Shape
-    print("Finding Nearest Neighbors")
-    adversarial_word_vectors = np.zeros([batch_size, num_skips])
-    for i in xrange(batch_size):
-      for j in xrange(num_skips):
-        adversarial_word_vectors[i][j] = (peturbed_similarity_matrix[:, j*batch_size + i]).argmax()
-        # print((sorted(-peturbed_similarity_matrix[:, j*batch_size + i]))[0:10])
+      # Pick a word that we want to turn everything into
+      adversarial_labels = np.array([valid_examples[2]]*batch_size)
+      adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
+      adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
 
-    print("Found Nearest Neighbors")
-    adversarial_word_vectors = np.reshape(adversarial_word_vectors.T, batch_size*num_skips)
 
-    def print_old_and_adversarial_contexts():
+      # real_grad = lossGrad.eval(feed_dict)
+      adversarial_grad = lossGrad.eval(adversarial_feed_dict) #np.sign(lossGrad.eval(adversarial_feed_dict))
+      print(real_grad)
+      print(adversarial_grad)
+      # How to turn one word vector into another
+      adversarial_perturbation =  eta*real_grad - eps*adversarial_grad
+      print("ADVERSARIAL PERTURBATION")
+      print(adversarial_perturbation.shape)
+
+
+      # Embed contexts in the vector space and add the adversarial_perturbation
+      [perturbed_embeddings] = session.run([tf.stop_gradient(curr_embedding)], feed_dict=feed_dict)
+      print("PERTURBED")
+      print(perturbed_embeddings.shape)
+
+      for skip_num in xrange(num_skips):
+        perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_perturbation
+      print(perturbed_embeddings)
+      # Find most similar words to new embeddings
+      current_embeddings = normalized_embeddings.eval() # Shape: vocab_size, embedding_size
+      peturbed_similarity_matrix = np.dot(current_embeddings, perturbed_embeddings.T) # Shape
+      print("Finding Nearest Neighbors")
+      adversarial_word_vectors = np.zeros([batch_size, num_skips])
       for i in xrange(batch_size):
         for j in xrange(num_skips):
-          print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
-          if j == num_skips/2-1:
-            print("_"+reverse_dictionary[int(batch_labels[i])] + "_ ", end="")
-        print(" -> ", end="")
-        for j in xrange(num_skips):
-          print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
-        print("")
-      print(reverse_dictionary[valid_examples[2]])
+          adversarial_word_vectors[i][j] = (peturbed_similarity_matrix[:, j*batch_size + i]).argmax()
+          # print((sorted(-peturbed_similarity_matrix[:, j*batch_size + i]))[0:10])
 
-    print_old_and_adversarial_contexts()
+      print("Found Nearest Neighbors")
+      adversarial_word_vectors = np.reshape(adversarial_word_vectors.T, batch_size*num_skips)
 
-    adversarial_inputs_dict = {train_inputs : adversarial_word_vectors, train_labels : adversarial_labels}
-    loss_results = session.run([lossGrad], feed_dict=adversarial_inputs_dict)[0]
-    print(len(loss_results))
-    for row in loss_results:
-      norm = np.linalg.norm(row)
-      if norm < 0.001:
-        print(norm)
-        print(row)  # This section is for loading and creating adversarial examples
+
+      # Check to see if the context predicts the correct label, only keep contexts that do not correctly
+      # predict the correct label
+      def save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples):
+        adversarial_examples_to_save = []
+        for example in modified_context_and_label_tuples:
+          print("checking example")
+          print(example)
+          list_of_word_vectors = []
+          for vec in dictionary[example[0]]:
+            list_of_word_vectors.append(vec)
+          if len(list_of_word_vectors) != 2: 
+          # Check to make sure that the size of the vector being averaged is equal to the window size
+            print("the length of the generated word vector is wrong")
+            exit()
+
+          average_word_vector = np.average(list_of_word_vectors) # Get the average of the context 
+          # TODO: mimic earlier code to compare cosine similarity of each average word vector 
+          # to its specific neg. sampling example and correct label word vector, remove the whole example 
+          # if it still predicts the correct output
+
+        # pickle the examples
+        if len(adversarial_examples_to_save) >= min_number_modified:        
+          print("pickling " + str(len(adversarial_examples_to_save) + " examples")
+          pickle.dump(adversarial_examples_to_save, open(existing_auxiliary_graph_path + '-adversarial_examples', 'w+'))
+          exit()
+        else:
+          print("only found " + str(len(adversarial_examples_to_save)) + " valid adversarial examples, continuing...")
+
+
+      def print_old_and_adversarial_contexts():
+        number_of_examples_modified = 0
+        modified_context_and_label_tuples = [] 
+        for i in xrange(batch_size):
+          original_words = []
+          new_words = []
+          label = reverse_dictionary[int(batch_labels[i])]
+          for j in xrange(num_skips):
+            # print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
+            # if j = num_skips/2-1:
+            #   print("_"+reverse_dictionary[int(batch_labels[i])] + "_ ", end="")
+            # else:
+            original_words += [reverse_dictionary[int(batch_inputs[i + batch_size*j])]]
+          # print(" -> ", end="")
+          for j in xrange(num_skips):
+            new_words += [reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])]]
+            # print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
+          # print("gives us")
+          # print(original_words)
+          # print("and new word:")
+          # print(new_words)
+          # print("")
+          if original_words != new_words:
+            number_of_examples_modified += 1
+            print(" ".join(original_words) + " --> " + " ".join(new_words) + " : " + label)
+            modified_context_and_label_tuples += [(new_words, label)]
+        if number_of_examples_modified >= min_number_modified:
+          print("done")
+          print(modified_context_and_label_tuples)
+          save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples)
+          # exit()
+        print(reverse_dictionary[valid_examples[2]])
+
+      print_old_and_adversarial_contexts()
+
+      adversarial_inputs_dict = {train_inputs : adversarial_word_vectors, train_labels : adversarial_labels}
+      loss_results = session.run([lossGrad], feed_dict=adversarial_inputs_dict)[0]
+      print(len(loss_results))
+      for row in loss_results:
+        norm = np.linalg.norm(row)
+        if norm < 0.001:
+          print(norm)
+          print(row)  # This section is for loading and creating adversarial examples
   else: #This section is for training a new neural network
     # We must initialize all variables before we use them.
     tf.initialize_all_variables().run()
