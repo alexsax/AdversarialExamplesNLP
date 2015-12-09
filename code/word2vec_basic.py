@@ -22,6 +22,10 @@ generate_adversarial_examples = False
 existing_auxiliary_graph_path = "../data/text8"
 num_steps = 100001
 
+# Variables that control generating adversarial examples
+min_number_modified = 25
+step_size = 0.01
+initial_step_value = 66
 
 def maybe_download(filename, expected_bytes):
   """Download a file if not present, and make sure it's the right size."""
@@ -141,8 +145,9 @@ valid_examples = np.array(random.sample(np.arange(valid_window), valid_size))
 num_sampled = 64    # Number of negative examples to sample.
 
 alpha = 0.5 # Interpolation constant for loss
-eta = 0.01 # Adversarial examples: move away from correct
-eps = 0.001 # Adversarial examples : move towards incorrect
+eta = initial_step_value #0.001 # Adversarial examples: move away from correct
+eps = initial_step_value #0.001 # Adversarial examples : move towards incorrect
+
 graph = tf.Graph()
 with graph.as_default():
   tf.set_random_seed(1337)
@@ -219,6 +224,18 @@ with tf.Session(graph=graph) as session:
     final_embeddings = embeddings.eval()
     print("Loaded - generating examples")
     if generate_adversarial_examples:
+      alternate = True
+      while (True):
+        if(alternate):
+          alternate = False
+          eta  += step_size
+        else:
+          alternate = True
+          eps += step_size
+        print("eta: " + str(eta))
+        print("eps: " + str(eps))
+      num_examples_modified = 0
+
       batch_inputs, batch_labels = generate_batch(
       batch_size, num_skips, skip_window)
       batch_inputs = np.reshape(batch_inputs.T, batch_size*num_skips)
@@ -238,9 +255,11 @@ with tf.Session(graph=graph) as session:
 
 
       # real_grad = lossGrad.eval(feed_dict)
-      adversarial_grad = np.sign(lossGrad.eval(adversarial_feed_dict))
-      print(real_grad)
-      print(adversarial_grad)
+      # adversarial_grad = np.sign(lossGrad.eval(adversarial_feed_dict))
+      adversarial_grad = lossGrad.eval(adversarial_feed_dict) #np.sign(lossGrad.eval(adversarial_feed_dict))
+      # print(real_grad)
+      # print(adversarial_grad)
+
       # How to turn one word vector into another
       adversarial_perturbation =  eta*real_grad - eps*adversarial_grad
       print("ADVERSARIAL PERTURBATION")
@@ -268,16 +287,79 @@ with tf.Session(graph=graph) as session:
       print("Found Nearest Neighbors")
       adversarial_word_vectors = np.reshape(adversarial_word_vectors.T, batch_size*num_skips)
 
+
+      # def print_old_and_adversarial_contexts():
+      #   for i in xrange(batch_size):
+      #     for j in xrange(num_skips):
+      #       print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
+      #       if j == num_skips/2-1:
+      #         print("_"+reverse_dictionary[int(batch_labels[i])] + "_ ", end="")
+      #     print(" -> ", end="")
+      #     for j in xrange(num_skips):
+      #       print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
+      #     print("")
+
+
+      # Check to see if the context predicts the correct label, only keep contexts that do not correctly
+      # predict the correct label
+      def save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples):
+        adversarial_examples_to_save = []
+        for example in modified_context_and_label_tuples:
+          print("checking example")
+          print(example)
+          list_of_word_vectors = []
+          for vec in dictionary[example[0]]:
+            list_of_word_vectors.append(vec)
+          if len(list_of_word_vectors) != 2: 
+          # Check to make sure that the size of the vector being averaged is equal to the window size
+            print("the length of the generated word vector is wrong")
+            exit()
+
+          average_word_vector = np.average(list_of_word_vectors) # Get the average of the context 
+          # TODO: mimic earlier code to compare cosine similarity of each average word vector 
+          # to its specific neg. sampling example and correct label word vector, remove the whole example 
+          # if it still predicts the correct output
+
+        # pickle the examples
+        if len(adversarial_examples_to_save) >= min_number_modified:        
+          print("pickling " + str(len(adversarial_examples_to_save) + " examples")
+          pickle.dump(adversarial_examples_to_save, open(existing_auxiliary_graph_path + '-adversarial_examples', 'w+'))
+          exit()
+        else:
+          print("only found " + str(len(adversarial_examples_to_save)) + " valid adversarial examples, continuing...")
+
+
       def print_old_and_adversarial_contexts():
+        number_of_examples_modified = 0
+        modified_context_and_label_tuples = [] 
         for i in xrange(batch_size):
+          original_words = []
+          new_words = []
+          label = reverse_dictionary[int(batch_labels[i])]
           for j in xrange(num_skips):
-            print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
-            if j == num_skips/2-1:
-              print("_"+reverse_dictionary[int(batch_labels[i])] + "_ ", end="")
-          print(" -> ", end="")
+            # print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
+            # if j = num_skips/2-1:
+            #   print("_"+reverse_dictionary[int(batch_labels[i])] + "_ ", end="")
+            # else:
+            original_words += [reverse_dictionary[int(batch_inputs[i + batch_size*j])]]
+          # print(" -> ", end="")
           for j in xrange(num_skips):
-            print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
-          print("")
+            new_words += [reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])]]
+            # print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
+          # print("gives us")
+          # print(original_words)
+          # print("and new word:")
+          # print(new_words)
+          # print("")
+          if original_words != new_words:
+            number_of_examples_modified += 1
+            print(" ".join(original_words) + " --> " + " ".join(new_words) + " : " + label)
+            modified_context_and_label_tuples += [(new_words, label)]
+        if number_of_examples_modified >= min_number_modified:
+          print("done")
+          print(modified_context_and_label_tuples)
+          save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples)
+          # exit()
         print(reverse_dictionary[valid_examples[2]])
 
       print_old_and_adversarial_contexts()
