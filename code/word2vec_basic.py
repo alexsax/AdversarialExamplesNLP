@@ -13,14 +13,26 @@ import tensorflow as tf
 import urllib
 import zipfile
 import cPickle as pickle
+import argparse
+import sys
+
+# Step 0: Command line parsing
+parser = argparse.ArgumentParser(description='Pocess the command line args.')
+parser.add_argument('--modelfile', default="", nargs='?',
+                   help="relative path to the file which contains the model")
+
+args = parser.parse_args(sys.argv[1:])
+
 # Step 1: Download the data.
 url = 'http://mattmahoney.net/dc/'
 
-# The path where previously stored models are saved. Set to "" to retrain from scratch
-existing_graph_path = "my-model-80000"
-generate_adversarial_examples = False
-existing_auxiliary_graph_path = "../data/text8"
-num_steps = 100001
+
+# The model has several parameters. It allows one to load a persistent model from disk or to 
+# train one from scratch. If existing_graph path is nonempty, it will load a model.
+existing_graph_path = args.modelfile if args.modelfile else "" #"my-model-80000"  # Previously stored models. Set to "" to retrain from scratc
+existing_auxiliary_graph_path = "../data/text8" # Where the data dictionaries are stored
+generate_adversarial_examples = False   # whether to generate examples
+num_steps = 100001                      # number of training epochs
 
 # Variables that control generating adversarial examples
 min_number_modified = 25
@@ -79,7 +91,7 @@ if not existing_graph_path:
   pickle.dump(dictionary, open(existing_auxiliary_graph_path + '-dictionary', 'w+'))
   pickle.dump(reverse_dictionary, open(existing_auxiliary_graph_path + '-reverse-dictionary', 'w+'))# Read in the data set
 else: 
-  print("loading from pickled dictionaries")
+  print("loading from pickled dictionaries in " + existing_auxiliary_graph_path)
   data = pickle.load(open(existing_auxiliary_graph_path + '-data', 'r'))
   dictionary = pickle.load(open(existing_auxiliary_graph_path + '-dictionary', 'r'))
   reverse_dictionary = pickle.load(open(existing_auxiliary_graph_path + '-reverse-dictionary', 'r'))
@@ -219,11 +231,12 @@ with graph.as_default():
 # Step 6: Begin training
 with tf.Session(graph=graph) as session:
   if existing_graph_path:
-    print("Starting load")
+    print("Starting load from " + existing_graph_path)
     saver.restore(session, existing_graph_path)
     final_embeddings = embeddings.eval()
-    print("Loaded - generating examples")
+    print("Loaded")
     if generate_adversarial_examples:
+      print("Generating examples")
       alternate = True
       while (True):
         if(alternate):
@@ -309,7 +322,7 @@ with tf.Session(graph=graph) as session:
           print(example)
           list_of_word_vectors = []
           for vec in dictionary[example[0]]:
-            list_of_word_vectors.append(vec)
+            list_of_word_vectors.axppend(vec)
           if len(list_of_word_vectors) != 2: 
           # Check to make sure that the size of the vector being averaged is equal to the window size
             print("the length of the generated word vector is wrong")
@@ -322,7 +335,7 @@ with tf.Session(graph=graph) as session:
 
         # pickle the examples
         if len(adversarial_examples_to_save) >= min_number_modified:        
-          print("pickling " + str(len(adversarial_examples_to_save) + " examples")
+          print("pickling " + str(len(adversarial_examples_to_save) + " examples"))
           pickle.dump(adversarial_examples_to_save, open(existing_auxiliary_graph_path + '-adversarial_examples', 'w+'))
           exit()
         else:
