@@ -481,7 +481,12 @@ with tf.Session(graph=graph) as session:
       feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
       # We perform one update step by evaluating the optimizer op (including it
       # in the list of returned values for session.run()
+<<<<<<< HEAD
+      _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
+
+=======
       _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
+>>>>>>> a03745baa3ff8b47f4a6a102479447e08a150e22
       average_loss += loss_val
 
       if step % 500 == 0:
@@ -533,8 +538,13 @@ with tf.Session(graph=graph) as session:
             print(log_str)
         print('saving session')
         basename_os = '../data/'
+<<<<<<< HEAD
         filename_os = 'loss_function'
         new_folder = 'Loss_FN/'
+=======
+        filename_os = 'sample-test'
+        new_folder = 'example/'
+>>>>>>> a03745baa3ff8b47f4a6a102479447e08a150e22
         if use_adversarial_examples:
           saver.save(session, basename_os+filename_os, global_step=step)
         else:
