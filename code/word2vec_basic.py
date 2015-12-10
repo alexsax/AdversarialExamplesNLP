@@ -218,7 +218,7 @@ with graph.as_default():
   # optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
   # opt = tf.train.GradientDescentOptimizer(0.025)
   opt = tf.train.AdamOptimizer(0.007)
-  grads_and_vars = opt.compute_gradients(new_loss)
+  grads_and_vars = opt.compute_gradients(loss)
   # grads_and_vars = opt.compute_gradients(loss)
   optimizer = opt.apply_gradients(grads_and_vars)
 
@@ -475,7 +475,7 @@ with tf.Session(graph=graph) as session:
       feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
       # We perform one update step by evaluating the optimizer op (including it
       # in the list of returned values for session.run()
-      _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
+      _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
 
       average_loss += loss_val
       if step % 500 == 0:
@@ -504,7 +504,7 @@ with tf.Session(graph=graph) as session:
             #   print("Average loss at step ", step, " after adversarial_examples: ", average_loss)
             #   average_loss = 0
       # note that this is expensive (~20% slowdown if computed every 500 steps)
-      if step % 1000 == 0:
+      if step % 10000 == 0:
         def print_similarities_to_valid_examples():
           sim = similarity.eval()
           for i in xrange(valid_size):
@@ -520,8 +520,8 @@ with tf.Session(graph=graph) as session:
             print(log_str)
         print('saving session')
         basename_os = '../data/'
-        filename_os = 'new_loss_function'
-        new_folder = 'New_Loss_FN/'
+        filename_os = 'loss_function'
+        new_folder = 'Loss_FN/'
         if use_adversarial_examples:
           saver.save(session, basename_os+filename_os, global_step=step)
         else:
