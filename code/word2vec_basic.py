@@ -70,7 +70,7 @@ def read_data(filename):
 vocabulary_size = 30000
 if not existing_graph_path:
   words = read_data(filename)
-  words = words[0:128*10001]
+  words = words[0:128*100001]
   print('Data size', len(words))
   # Step 2: Build the dictionary and replace rare words with UNK token.
   def build_dataset(words):

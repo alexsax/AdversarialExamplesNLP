@@ -1,0 +1,306 @@
+#!/bin/sh
+
+# CS224N submit script
+# Adapted from a CS143 submit script by Bill MacCartney.
+
+# Original comments:
+
+# Electronic Submission Script v1.2
+# Julie Zelenski (zelenski@cs.stanford.edu)
+
+# Not fancy, but hopefully gets the job done.  Expects to be run on
+# the leland machines, copies student directory in the class area.
+# Because of AFS, we can have an area that is insertable by students --
+# i.e. new files can be written, no files are readable, thus it is
+# possible for this script to simply copy their directory into that space.
+
+# Variables to muck with to change parameters about course itself
+# where files, dirs, etc. are.
+
+CLASSNAME=CS224N
+CLASS_DIR=/afs/ir/class/cs224n
+ASSIGNS="pa1 pa2 pa3 pa4-dep pa4-ner fp cgw"
+REQUIRES_README="pa1 pa2 pa3 pa4-dep pa4-ner fp"
+STAFF_EMAIL_ADDRESS=cs224n-aut1516-staff@lists.stanford.edu
+YES="Y y Yes yes"
+NO="N n No no"
+
+SUBMIT_DIR=$CLASS_DIR/submissions
+MAX_SUBMISSIONS=9
+
+MAX_FILE_SIZE=15000 # KB
+
+HAVE_PARTNER="n"
+USER_USERNAME=""
+PARTNER1_USERNAME=""
+PARTNER2_USERNAME=""
+
+# Change the path to be sure to include the local and pubsw paths
+# in front so that we find the things we need, rather than
+# hard-coding the paths to various utilities and having it later
+# break when things move around.  This idea brought to you by
+# Larry Schwimmer.
+
+PATH=/usr/local/bin:/usr/pubsw/bin:/usr/bin:$PATH
+
+DU=du
+MKDIR=mkdir
+AWK=awk
+TAR=tar
+FS=fsr
+MAIL=mail
+DC=dc
+
+prompt () {
+    if [ $# -eq 0 ]; then
+        msg="=>"
+    else
+        msg=$1
+    fi
+    if [ -r /usr/bin/echo ]; then
+        /usr/bin/echo "$msg \c"
+    else
+        echo -n "$msg "
+    fi
+}
+
+
+# ----------- Greeting message w/ pointer to help file for more info
+echo
+echo "This script is used for electronic submissions for $CLASSNAME."
+echo "**** **** IMPORTANT NOTE **** ****"
+echo "We've changed this script between PA2 and PA3 and tried to make it"
+echo "easier to use, but since this is new, there may be some bugs. If "
+echo "you encounter an error, please submit using"
+echo "/afs/ir/class/cs224n/bin/original_submit and let us know at"
+echo "$STAFF_EMAIL_ADDRESS"
+echo "Thank you!"
+#    echo "For help on using the script please read the helpfile: "
+#    echo "      $HELPFILE"
+
+
+# ----------- Make sure we have the Leland filesystem
+if [ ! -d $SUBMIT_DIR ]; then
+    cat <<END
+
+SUBMIT FAILED:  $SUBMIT_DIR does not exist!  
+You're probably not using this script on a leland machine.  (Either that
+or something is seriously wrong -- tell the staff at $STAFF_EMAIL_ADDRESS).
+END
+
+    exit 1
+fi
+
+
+# ----------- Find out where they stored their project
+echo
+while [ true ]; do
+    echo "Directory where your assignment lives?"
+    echo "(Relative paths are OK.  Use \".\" for current directory.)"
+    prompt
+    read ASSIGNHOME
+    if [ $ASSIGNHOME ] ; then
+        if [ -r $ASSIGNHOME -a -d $ASSIGNHOME ]; then break; fi
+    fi
+    echo "Cannot read directory \"$ASSIGNHOME\"."
+    echo "    By the way, the easiest way to use this script is to first"
+    echo "    cd to your project directory, and then specify the directory"
+    echo "    as . (dot), which translates to the current directory."
+    prompt "Try again."
+done
+
+
+# ----------- Ask which assignment they are submitting
+echo
+while [ true ]; do
+    echo "Which assignment are you submitting? ($ASSIGNS)"
+    prompt
+    read ASSIGNMENT
+    if [ $ASSIGNMENT ] ; then
+        for MATCH in $ASSIGNS; do 
+            if [ $ASSIGNMENT = $MATCH ]; then break 2; fi
+        done
+    fi
+    echo "Valid assignments to submit are ($ASSIGNS)."
+    prompt "Try again."
+done
+
+
+# ----------- Move to the project dir
+cd $ASSIGNHOME
+
+ 
+# ----------- Verify that the project dir has a report pdf (if required)
+for MATCH in $REQUIRES_README; do 
+    if [ $ASSIGNMENT = $MATCH ]; then 
+        echo
+        prompt "Looking for a report in your project directory..."
+
+        numPDFs=`find . -maxdepth 1 -name \*.pdf | wc -l`
+    
+        #if [[ $numPDFs > 1 ]]
+        #then cat <<END
+        #    SUBMIT FAILED: More than one PDF found in your project directory.
+#END
+#            exit 1
+ #       elif [ ! "`find . -maxdepth 1 -name \*.pdf -print`" ]
+        if [ ! "`find . -maxdepth 1 -name \*.pdf -print`" ]
+            then cat <<END
+            SUBMIT FAILED: There is no report in your project directory.
+            Please put your report PDF in the root of your project directory.
+END
+            exit 1
+        else 
+            echo "OK"
+        fi
+    fi
+done
+
+
+# ----------- Make sure there are no binaries, cores, etc. in project dir
+echo
+prompt "Checking to make sure the project directory is clean..."
+junk=`find . \( -name dcc -o -name .git -o -name .metadata -o -name \*.class -o -name a.out -o -name core -o -name \*.tables \
+     -o -name \#\* -o -name \*~ -o -name .\*~ \) -print`
+if [ "$junk" ]; then
+    cat <<END
+
+SUBMIT FAILED:  The project directory $ASSIGNHOME needs to be cleaned up.  
+We only need source files.  No executables, .class files, .git files, core files, editor backup files, etc. The offending files are: 
+$junk.  
+Please clean up your project directory and run the submit script again. 
+END
+
+    exit 1
+else
+    echo "OK"
+fi
+
+
+# ----------- Make sure size is reasonable
+echo
+prompt "Checking the size..."
+if [ `$DU -s .| $AWK '{ print $1; }'` -gt $MAX_FILE_SIZE ]
+then cat <<END
+
+SUBMIT FAILED: The contents of the project directory is too large
+(over $MAX_FILE_SIZE K). Please delete unneeded executables, core files, 
+and other large files that don't belong and run the submit script again.
+This is what your submit directory looks like :
+END
+$DU -h -d2
+    exit 1
+else
+    echo "OK"
+fi
+
+
+# ----------- Check about partners
+
+while [ true ] ; do
+    echo
+    echo "Did you work with any partners on this assignment? (y/n)"
+    prompt
+    read HAVE_PARTNER
+    case $HAVE_PARTNER in
+    Y | y | Yes | yes )
+
+        HAVE_PARTNER='y'
+
+        echo
+        echo "What is your first partner's SUNet ID? (This should be something like 'janedoe' and not '12345678')"
+        prompt
+        read PARTNER1_USERNAME
+        echo "First partner is $PARTNER1_USERNAME."
+        echo
+        echo "Do you have another partner (y/n)?"
+        prompt
+        read answer;
+        if [ $answer != "n" -a $answer != "N" ]; then
+            echo
+            echo "What is your other partner's SUNet ID? (This should be something like 'janedoe' and not '12345678')"
+            prompt
+            read PARTNER2_USERNAME
+            echo "Second partner is $PARTNER2_USERNAME."
+        fi
+        break;
+        ;;
+
+    N | n | No | no )
+        HAVE_PARTNER="n"
+        break;
+        ;;
+    * )
+        echo "Please answer y or n."
+        ;;
+    esac
+done
+
+
+# ----------- Set up team info
+
+TEAM_NAME=`printf $USER"\n"$PARTNER1_USERNAME"\n"$PARTNER2_USERNAME | sort | awk '$NF' | tr '\n' '-'`
+
+# ----------- Set up submission directory for this student
+
+teamDir () {
+  echo $SUBMIT_DIR/$ASSIGNMENT/$TEAM_NAME$ITERATION
+}
+
+ITERATION=1
+TEAM_DIR=`teamDir`
+
+submissionInfo () {
+    NOW=`date "+%Y-%m-%dT%H:%M:%S"`
+    SUBMISSION_INFO="$NOW $TEAM_NAME$ITERATION"
+    echo $SUBMISSION_INFO > $TEAM_DIR/TIMESTAMP.txt
+}
+
+# ----------- If student dir is already there, ask before overwrite
+# Needs to do overwrite by appending digit and making new directory
+# Can't overwrite an "i" dir, don't want to give them "w" permissions
+if [ -d $TEAM_DIR ]; then    
+    echo
+    echo "A $ASSIGNMENT directory already exists for you."
+    while [ -d $TEAM_DIR ]; do
+	ITERATION=`expr $ITERATION + 1`;
+        TEAM_DIR=`teamDir`
+        if [ $ITERATION -gt $MAX_SUBMISSIONS ]; then cat <<END
+
+SUBMIT FAILED.  You have already entered $MAX_SUBMISSIONS submissions
+for this assignment.  You are probably having some sort of trouble
+with the electronic submission script.  Please send mail to
+$STAFF_EMAIL_ADDRESS to resolve this and enable you to submit your
+final version.
+END
+            exit 1
+        fi
+    done
+fi
+$MKDIR -p $TEAM_DIR; if [ ! -d $TEAM_DIR ]; then
+    echo; echo "SUBMIT FAILED:  Unable to create directory $TEAM_DIR."
+    echo "Send mail to $STAFF_EMAIL_ADDRESS to get help."
+    exit 1
+fi
+
+
+# ----------- Copy the entire directory tree over
+$TAR cf - . | (cd $TEAM_DIR; $TAR xf -) >/dev/null 2>&1
+
+# The following line was mysteriously failing for some people
+# (although their files WERE copied over successfully)
+
+# if ( $TAR cf - . | (cd $TEAM_DIR; $TAR xf -) >/dev/null 2>&1 ) ; then
+    echo
+    echo "SUBMIT SUCCESS!"
+    SUBMISSION_INFO=`submissionInfo`
+    echo "$ASSIGNMENT submission with identifier $TEAM_NAME$ITERATION created."
+
+    #PDFName=$TEAM_DIR"/"$ASSIGNMENT"_"$TEAM_NAME$ITERATION".pdf"
+    #cp `find $ASSIGN_HOME -maxdepth 1 -name *.pdf` $PDFName
+    exit 0
+# else
+#    echo; echo "SUBMIT FAILED:  Unable to copy files."
+#    echo "Send mail to $STAFF_EMAIL_ADDRESS to get help."
+#    exit 1
+# fi
