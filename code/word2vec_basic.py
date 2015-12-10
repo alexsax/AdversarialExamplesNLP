@@ -18,8 +18,16 @@ import sys
 
 # Step 0: Command line parsing
 parser = argparse.ArgumentParser(description='Pocess the command line args.')
-parser.add_argument('--modelfile', default="", nargs='?',
+parser.add_argument('-m','--modelfile', default="", nargs='?',
                    help="relative path to the file which contains the model")
+parser.add_argument('-g', '--generate', dest='generate', action='store_true',
+                      help="Generate adversarial examples")
+parser.set_defaults(generate=False)
+
+
+parser.add_argument('-p', '--printlabels', dest="printlabels", action='store_true',
+                   help="Print the predicted labels")
+parser.set_defaults(printlabels=False)
 
 args = parser.parse_args(sys.argv[1:])
 
@@ -29,15 +37,16 @@ url = 'http://mattmahoney.net/dc/'
 
 # The model has several parameters. It allows one to load a persistent model from disk or to 
 # train one from scratch. If existing_graph path is nonempty, it will load a model.
-existing_graph_path = args.modelfile if args.modelfile else "" #"my-model-80000"  # Previously stored models. Set to "" to retrain from scratc
+existing_graph_path = args.modelfile if args.modelfile else ""#../data/baseline10000" # Previously stored models. Set to "" to retrain from scratc
 existing_auxiliary_graph_path = "../data/text8" # Where the data dictionaries are stored
-generate_adversarial_examples = False   # whether to generate examples
+generate_adversarial_examples = args.generate   # whether to generate examples
+print_labels = args.printlabels
 num_steps = 100001                      # number of training epochs
 
 # Variables that control generating adversarial examples
-min_number_modified = 25
-step_size = 0.01
-initial_step_value = 66
+min_number_modified = 1
+step_size = 1
+initial_step_value = 1
 
 def maybe_download(filename, expected_bytes):
   """Download a file if not present, and make sure it's the right size."""
@@ -61,7 +70,7 @@ def read_data(filename):
 vocabulary_size = 30000
 if not existing_graph_path:
   words = read_data(filename)
-  # words = words[0:128*10001]
+  words = words[0:128*10001]
   print('Data size', len(words))
   # Step 2: Build the dictionary and replace rare words with UNK token.
   def build_dataset(words):
@@ -180,15 +189,6 @@ with graph.as_default():
 
   embed = tf.reshape(curr_embedding, [num_skips, batch_size, embedding_size ]) # NEW
   embed = tf.reduce_sum(embed, 0)
-  # embed = tf.reshape(curr_embedding, [batch_size, num_skips, embedding_size]) # OLD
-  # embed = tf.reduce_sum(embed, 1)
-
-  # Compute the average NCE loss for the batch.
-  # tf.nce_loss automatically draws a new sample of the negative labels each
-  # time we evaluate the loss.
-  loss = tf.reduce_mean(
-      tf.nn.nce_loss(nce_weights, nce_biases, embed, train_labels,
-                     num_sampled, vocabulary_size))
 
 
   # Compute the cosine similarity between minibatch examples and all embeddings.
@@ -199,17 +199,25 @@ with graph.as_default():
   similarity = tf.matmul(
       valid_embeddings, normalized_embeddings, transpose_b=True)
 
+  # Compute the average NCE loss for the batch.
+  # tf.nce_loss automatically draws a new sample of the negative labels each
+  # time we evaluate the loss.
+  loss = tf.reduce_mean(
+      tf.nn.nce_loss(nce_weights, nce_biases, embed, train_labels,
+                     num_sampled, vocabulary_size))
   lossGrad = gradients.gradients(loss, embed)[0]
   new_loss = alpha*loss + (1-alpha)*tf.reduce_mean(
       tf.nn.nce_loss(nce_weights, nce_biases, embed + eta*lossGrad, train_labels,
                      num_sampled, vocabulary_size))
 
+  results = tf.nn.softmax(tf.matmul(embed, nce_weights, transpose_b=True) + nce_biases)
+
   # Construct the SGD optimizer using a learning rate of 1.0.
   # optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
   # opt = tf.train.GradientDescentOptimizer(0.025)
   opt = tf.train.AdamOptimizer(0.007)
-  # grads_and_vars = opt.compute_gradients(new_loss)
-  grads_and_vars = opt.compute_gradients(loss)
+  grads_and_vars = opt.compute_gradients(new_loss)
+  # grads_and_vars = opt.compute_gradients(loss)
   optimizer = opt.apply_gradients(grads_and_vars)
 
   print('initializing saver')
@@ -235,156 +243,199 @@ with tf.Session(graph=graph) as session:
     saver.restore(session, existing_graph_path)
     final_embeddings = embeddings.eval()
     print("Loaded")
+    print(generate_adversarial_examples)
+
     if generate_adversarial_examples:
+      # 1/1000th the size of a vector
+      # 1/1000th the JND of a vector
+      print(reverse_dictionary[valid_examples[2]])
+      print(embeddings[valid_examples[2], :].eval())
+      # step_size = (np.linalg.norm(np.linalg.norm(embeddings.eval(), ord=-np.inf, axis = 1), ord=1)/vocabulary_size)/10
+      print(step_size)
       print("Generating examples")
       alternate = True
       while (True):
         if(alternate):
           alternate = False
-          eta  += step_size
+          eta  += 0#step_size
         else:
-          alternate = True
+          alternate = False#True
           eps += step_size
         print("eta: " + str(eta))
         print("eps: " + str(eps))
-      num_examples_modified = 0
+        num_examples_modified = 0
 
-      batch_inputs, batch_labels = generate_batch(
-      batch_size, num_skips, skip_window)
-      batch_inputs = np.reshape(batch_inputs.T, batch_size*num_skips)
-      feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
-      # Gradient - I think
-      # I'm reasonably sure that this is the method by which we can set up and
-      # evaluating a gradient without also doing backpropogation and updating 
-      # the entire NN.
-      # lossGrad = tf.stop_gradient(gradients.gradients(loss, embed)[0])
-
-      real_grad = lossGrad.eval(feed_dict)
-
-      # Pick a word that we want to turn everything into
-      adversarial_labels = np.array([valid_examples[2]]*batch_size)
-      adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
-      adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
+        batch_inputs, batch_labels = generate_batch(batch_size, num_skips, skip_window)
+        batch_inputs = np.reshape(batch_inputs.T, batch_size*num_skips)
+        feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
 
 
-      # real_grad = lossGrad.eval(feed_dict)
-      # adversarial_grad = np.sign(lossGrad.eval(adversarial_feed_dict))
-      adversarial_grad = lossGrad.eval(adversarial_feed_dict) #np.sign(lossGrad.eval(adversarial_feed_dict))
-      # print(real_grad)
-      # print(adversarial_grad)
+        real_grad = lossGrad.eval(feed_dict)
 
-      # How to turn one word vector into another
-      adversarial_perturbation =  eta*real_grad - eps*adversarial_grad
-      print("ADVERSARIAL PERTURBATION")
-      print(adversarial_perturbation.shape)
+        # Pick a word that we want to turn everything into
+        adversarial_labels = np.array([valid_examples[2]]*batch_size)
+        adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
+        adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
 
 
-      # Embed contexts in the vector space and add the adversarial_perturbation
-      [perturbed_embeddings] = session.run([tf.stop_gradient(curr_embedding)], feed_dict=feed_dict)
-      print("PERTURBED")
-      print(perturbed_embeddings.shape)
-
-      for skip_num in xrange(num_skips):
-        perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_perturbation
-      print(perturbed_embeddings)
-      # Find most similar words to new embeddings
-      current_embeddings = normalized_embeddings.eval() # Shape: vocab_size, embedding_size
-      peturbed_similarity_matrix = np.dot(current_embeddings, perturbed_embeddings.T) # Shape
-      print("Finding Nearest Neighbors")
-      adversarial_word_vectors = np.zeros([batch_size, num_skips])
-      for i in xrange(batch_size):
-        for j in xrange(num_skips):
-          adversarial_word_vectors[i][j] = (peturbed_similarity_matrix[:, j*batch_size + i]).argmax()
-          # print((sorted(-peturbed_similarity_matrix[:, j*batch_size + i]))[0:10])
-
-      print("Found Nearest Neighbors")
-      adversarial_word_vectors = np.reshape(adversarial_word_vectors.T, batch_size*num_skips)
+        
+        # adversarial_grad = np.sign(lossGrad.eval(adversarial_feed_dict))
+        adversarial_grad = lossGrad.eval(adversarial_feed_dict) 
 
 
-      # def print_old_and_adversarial_contexts():
-      #   for i in xrange(batch_size):
-      #     for j in xrange(num_skips):
-      #       print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
-      #       if j == num_skips/2-1:
-      #         print("_"+reverse_dictionary[int(batch_labels[i])] + "_ ", end="")
-      #     print(" -> ", end="")
-      #     for j in xrange(num_skips):
-      #       print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
-      #     print("")
+        # How to turn one word vector into another
+        adversarial_perturbation =  -adversarial_grad #eta*real_grad - eps*adversarial_grad
+        normalized_gradient = (adversarial_perturbation.T/np.linalg.norm(adversarial_perturbation, axis=1)).T
+        print(normalized_gradient.shape)
+
+        # Embed contexts in the vector space and add the adversarial_perturbation
+        [perturbed_embeddings] = session.run([tf.stop_gradient(curr_embedding)], feed_dict=feed_dict)
 
 
-      # Check to see if the context predicts the correct label, only keep contexts that do not correctly
-      # predict the correct label
-      def save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples):
-        adversarial_examples_to_save = []
-        for example in modified_context_and_label_tuples:
-          print("checking example")
-          print(example)
-          list_of_word_vectors = []
-          for vec in dictionary[example[0]]:
-            list_of_word_vectors.axppend(vec)
-          if len(list_of_word_vectors) != 2: 
-          # Check to make sure that the size of the vector being averaged is equal to the window size
-            print("the length of the generated word vector is wrong")
+        # for skip_num in xrange(num_skips):
+        #   perturbed_embeddings[skip_num*batch_size:(skip_num+1)*batch_size] += adversarial_perturbation
+
+        # a_results = tf.nn.softmax(tf.matmul(embed + adversarial_perturbation, nce_weights, transpose_b=True) + nce_biases)
+
+        # Find most similar words to new embeddings
+        adversarial_word_vectors = np.zeros([batch_size*num_skips])
+        # current_embeddings = normalized_embeddings.eval() # Shape: vocab_size, embedding_size
+        # p_norm = tf.sqrt(tf.reduce_sum(tf.square(perturbed_embeddings), 1, keep_dims=True))
+        # normalized_p_embeddings = perturbed_embeddings / p_norm
+        for example_num in xrange(batch_size):
+          for skip_num in xrange(num_skips):
+            diffs = embeddings.eval() - perturbed_embeddings[skip_num*batch_size + example_num, :]
+            norms = np.linalg.norm(diffs, ord=2, axis=1)
+            diffs = (diffs.T/norms).T
+
+            result = np.dot(diffs, normalized_gradient[example_num,:])
+            # bool_arr = np.greater(norms, eps, dtype=bool)
+            # print(np.empty(vocabulary_size).fill(eps))
+            result[norms > eps] = -1
+            result[np.isnan(result)] = 0
+            adversarial_word_vectors[skip_num*batch_size + example_num] = result.argmax() #result.argmax()
+        # # peturbed_similarity_matrix = np.dot(current_embeddings, normalized_p_embeddings.eval().T) # Shape
+        # peturbed_similarity_matrix = np.dot(current_embeddings, normalized_p_embeddings.eval().T) # Shape
+
+        # # print("Finding Nearest Neighbors")
+        # adversarial_word_vectors = np.zeros([batch_size*num_skips])
+        # for i in xrange(batch_size):
+        #   for j in xrange(num_skips):
+        #     adversarial_word_vectors[j*batch_size + i] = (peturbed_similarity_matrix[:, j*batch_size + i]).argmax()
+
+        adversarial_feed_dict = {train_inputs: adversarial_word_vectors, train_labels: adversarial_labels}
+
+
+        def context_to_str(context, label="_", already_string=False):
+          split_idx = int(len(context)/2)
+          prior = context[0:split_idx]
+          post = context[split_idx:]
+          output = []
+          if already_string:
+            output = prior + ["_" + label + "_"] + post
+          else:
+            output = [reverse_dictionary[word_idx] for word_idx in prior] + ["_"+reverse_dictionary[label]+"_"] + [reverse_dictionary[word_idx] for word_idx in post]
+          return " ".join(output)
+
+        # Check to see if the context predicts the correct label, only keep contexts that do not correctly
+        # predict the correct label
+        # Given the adversarial feed dict, returns all the ones successfully modified
+        def evaluate_successful_examples():
+          o_embed, orig_results = session.run([embed, results], feed_dict=feed_dict)
+          orig_sim_to_correct = [orig_results[i, batch_labels[i]][0] for i in xrange(batch_size)]
+          orig_sim_to_adv = [orig_results[i, adversarial_labels[i]][0] for i in xrange(batch_size)]
+
+          a_embed, adv_results = session.run([embed, results], feed_dict=adversarial_feed_dict)
+          sim_to_correct = [adv_results[i, batch_labels[i]][0] for i in xrange(batch_size)]
+          sim_to_adv = [adv_results[i, adversarial_labels[i]][0] for i in xrange(batch_size)]
+
+          # for i in xrange(batch_size):
+          #   if(batch_inputs[i] == adversarial_word_vectors[i] and batch_inputs[i] == adversarial_word_vectors[i]): continue
+          #   print()
+          #   print((orig_sim_to_adv[i] < orig_sim_to_correct[i] and sim_to_adv[i] > sim_to_correct[i]))
+          #   print(orig_sim_to_adv[i], "<", orig_sim_to_correct[i], " & ", sim_to_adv[i], ">", sim_to_correct[i])
+          correct = [(orig_sim_to_adv[i] < orig_sim_to_correct[i] and sim_to_adv[i] > sim_to_correct[i])
+                            for i in xrange(batch_size)]
+          return correct
+
+        def save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples):
+          correct = evaluate_successful_examples()
+          adversarial_examples_to_save = [modified_context_and_label_tuples[i] for i, good in enumerate(correct) if good]
+          if len(adversarial_examples_to_save) >= min_number_modified:        
+            print("pickling " + str(len(adversarial_examples_to_save)) + " examples")
+            print("Target label: " + reverse_dictionary[valid_examples[2]])
+            pickle.dump(adversarial_examples_to_save, open(existing_auxiliary_graph_path + '-adversarial_examples', 'w+'))
             exit()
+          else:
+            print("only found " + str(len(adversarial_examples_to_save)) + " valid adversarial examples, continuing...")
 
-          average_word_vector = np.average(list_of_word_vectors) # Get the average of the context 
-          # TODO: mimic earlier code to compare cosine similarity of each average word vector 
-          # to its specific neg. sampling example and correct label word vector, remove the whole example 
-          # if it still predicts the correct output
-
-        # pickle the examples
-        if len(adversarial_examples_to_save) >= min_number_modified:        
-          print("pickling " + str(len(adversarial_examples_to_save) + " examples"))
-          pickle.dump(adversarial_examples_to_save, open(existing_auxiliary_graph_path + '-adversarial_examples', 'w+'))
-          exit()
-        else:
-          print("only found " + str(len(adversarial_examples_to_save)) + " valid adversarial examples, continuing...")
+        def get_prediction(results_mat, i):
+          return reverse_dictionary[np.argmax(results_mat[i,:])]
 
 
-      def print_old_and_adversarial_contexts():
-        number_of_examples_modified = 0
-        modified_context_and_label_tuples = [] 
-        for i in xrange(batch_size):
-          original_words = []
-          new_words = []
-          label = reverse_dictionary[int(batch_labels[i])]
-          for j in xrange(num_skips):
-            # print(reverse_dictionary[int(batch_inputs[i + batch_size*j])] + " ", end="")
-            # if j = num_skips/2-1:
-            #   print("_"+reverse_dictionary[int(batch_labels[i])] + "_ ", end="")
-            # else:
-            original_words += [reverse_dictionary[int(batch_inputs[i + batch_size*j])]]
-          # print(" -> ", end="")
-          for j in xrange(num_skips):
-            new_words += [reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])]]
-            # print(reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])] + " ", end="")
-          # print("gives us")
-          # print(original_words)
-          # print("and new word:")
-          # print(new_words)
-          # print("")
-          if original_words != new_words:
-            number_of_examples_modified += 1
-            print(" ".join(original_words) + " --> " + " ".join(new_words) + " : " + label)
+        def print_old_and_adversarial_contexts():
+          number_of_examples_modified = 0
+          modified_context_and_label_tuples = [] 
+          original_results = results.eval(feed_dict)
+          adversarial_results = results.eval(adversarial_feed_dict)
+          for i in xrange(batch_size): # print out all the new examples
+            original_words = []
+            new_words = []
+            label = reverse_dictionary[int(batch_labels[i])]
+            for j in xrange(num_skips):
+              original_words += [reverse_dictionary[int(batch_inputs[i + batch_size*j])]]
+            for j in xrange(num_skips):
+              new_words += [reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])]]
+            if original_words != new_words:
+              number_of_examples_modified += 1
+
+              print( context_to_str(original_words, label, already_string=True) +
+                      " --> " +
+                      context_to_str(new_words, label, already_string=True) + 
+                      " | but predicts: " +
+                      get_prediction(original_results, i) + " -> " +
+                      get_prediction(adversarial_results, i))
             modified_context_and_label_tuples += [(new_words, label)]
-        if number_of_examples_modified >= min_number_modified:
-          print("done")
-          print(modified_context_and_label_tuples)
-          save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples)
-          # exit()
-        print(reverse_dictionary[valid_examples[2]])
+          if number_of_examples_modified >= min_number_modified:
+            print("done")
+            # print(modified_context_and_label_tuples)
+            # if evaluate_number_successful_examples() > min_number_modified:
+            #   exit()
+            save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples)
+            # exit()
+          print("")
 
-      print_old_and_adversarial_contexts()
+        print_old_and_adversarial_contexts()
 
-      adversarial_inputs_dict = {train_inputs : adversarial_word_vectors, train_labels : adversarial_labels}
-      loss_results = session.run([lossGrad], feed_dict=adversarial_inputs_dict)[0]
-      print(len(loss_results))
-      for row in loss_results:
-        norm = np.linalg.norm(row)
-        if norm < 0.001:
-          print(norm)
-          print(row)  # This section is for loading and creating adversarial examples
+        adversarial_inputs_dict = {train_inputs : adversarial_word_vectors, train_labels : adversarial_labels}
+
+
+
+        if print_labels:
+          # orig_batch_inputs, batch_labels = generate_batch(batch_size, num_skips, skip_window)
+
+          # batch_inputs = np.reshape(orig_batch_inputs.T, batch_size*num_skips)
+          # feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
+
+          feed_dict_results = results.eval(adversarial_feed_dict)
+          print(feed_dict_results.shape)
+          print(batch_labels[:,0].shape)
+          correct = tf.nn.in_top_k(feed_dict_results, adversarial_labels[:,0], 10000).eval()
+
+          def context_to_str(context, label="_"):
+            prior = context[0:len(context)/2]
+            post = context[len(context)/2:]
+            output = [reverse_dictionary[word_idx] for word_idx in prior] + ["_"+reverse_dictionary[label]+"_"] + [reverse_dictionary[word_idx] for word_idx in post]
+            " ".join(output)
+
+          for i in xrange(128):
+            if correct[i]:
+              print(context_to_str(orig_batch_inputs[i], label=adversarial_labels[i,0]))
+              predicted_words = [reverse_dictionary[word_idx] for word_idx in feed_dict_results[i,:].argsort()[0:100]]
+              predicted_probs = sorted(feed_dict_results[i,:], reverse = True)[0:100]
+              print(zip(predicted_words, predicted_probs))
+          print(len([True for ex in correct if ex]))
+
   else: #This section is for training a new neural network
     # We must initialize all variables before we use them.
     tf.initialize_all_variables().run()
@@ -398,7 +449,7 @@ with tf.Session(graph=graph) as session:
       feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
       # We perform one update step by evaluating the optimizer op (including it
       # in the list of returned values for session.run()
-      _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
+      _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
 
       average_loss += loss_val
       if step % 500 == 0:
@@ -423,7 +474,7 @@ with tf.Session(graph=graph) as session:
               log_str = "%s %s," % (log_str, close_word)
             print(log_str)
         print('saving session')
-        saver.save(session, 'my-model', global_step=step)
+        saver.save(session, '../data/newloss', global_step=step)
         print_similarities_to_valid_examples()
   final_embeddings = normalized_embeddings.eval()
 
@@ -471,4 +522,3 @@ def plot_with_labels(low_dim_embs, labels, filename='tsne.png'):
 # except ImportError:
 #   print("Please install sklearn and matplotlib to visualize embeddings.")
 
-# Step 9: Generate adversarial examples
