@@ -1,5 +1,4 @@
-# Risky but cool
-
+#  Safe version
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -486,46 +485,19 @@ with tf.Session(graph=graph) as session:
         print("Average loss at step ", step, " before: ", average_loss)
         average_loss = 0
 
-      # note that this is expensive (~20% slowdown if computed every 500 steps)
-      if step % 10000 == 0:
-        def print_similarities_to_valid_examples():
-          sim = similarity.eval()
-          for i in xrange(valid_size):
-            valid_word = reverse_dictionary[valid_examples[i]]
-            def nearest_neighbors(idx, top_k=8):
-              return (-sim[idx, :]).argsort()[1:top_k+1]
-            top_k = 8
-            nearest = nearest_neighbors(i)
-            log_str = "Nearest to %s:" % valid_word
-            for k in xrange(top_k):
-              close_word = reverse_dictionary[nearest[k]]
-              log_str = "%s %s," % (log_str, close_word)
-            print(log_str)
-        print('saving session')
-        basename_os = '../data/'
-        filename_os = 'loss_function_with_adversarial_training_before'
-        new_folder = 'With_Adversarial_Training_Before/'
-        if use_adversarial_examples:
-          saver.save(session, basename_os+filename_os, global_step=step)
-        else:
-          saver.save(session, basename_os+filename_os, global_step=step)
-        
-        # Move the file to a safe folder
-        extension = '-'+str(step)
-        os.rename(basename_os+filename_os+extension, basename_os+new_folder+filename_os+extension)
-          
-        print_similarities_to_valid_examples()
+      
 
-      if use_adversarial_examples and step % 10000 == 0 and step > 0:
+      if use_adversarial_examples and step % 5000 == 0 and step > 0:
           # generate new adversarial examples
-          print("start subprocess to generate adversarial examples")
+          # print("start subprocess to generate adversarial examples")
           # os.remove('../data/text8-adversarial_examples')
-          subprocess.call('rm "../data/text8-adversarial_examples"', shell=True) # get rid of old training data
-          subprocess.call('bash make_examples.sh "../data/With_Adversarial_Training_Before/loss_function_with_adversarial_training_before-'+str(step)+'"', shell=True)
-          print("finished running subproccess to generate adversarial examples")
+          # subprocess.call('rm "../data/text8-adversarial_examples"', shell=True)
+          # subprocess.call('bash make_examples.sh "../data/my-model-100000"', shell=True)
+          # print("finished running subproccess to generate adversarial examples")
 
           #open up the adversarial example dictionary
-          adversarial_examples = pickle.load(open(existing_auxiliary_graph_path + '-adversarial_examples', 'r')) 
+          print("adversarial_examples training time!")
+          adversarial_examples = pickle.load(open(existing_auxiliary_graph_path + '-adversarial_examples-standard', 'r')) 
           print("printing adversarial_examples from storage")
           print(adversarial_examples)
 
@@ -565,7 +537,7 @@ with tf.Session(graph=graph) as session:
         print('saving session')
         basename_os = '../data/'
         filename_os = 'loss_function_with_adversarial_training'
-        new_folder = 'With_Adversarial_Training/'
+        new_folder = 'Standard_Adversarial_Training/'
         if use_adversarial_examples:
           saver.save(session, basename_os+filename_os, global_step=step)
         else:
@@ -576,6 +548,7 @@ with tf.Session(graph=graph) as session:
         os.rename(basename_os+filename_os+extension, basename_os+new_folder+filename_os+extension)
           
         print_similarities_to_valid_examples()
+
       
   final_embeddings = normalized_embeddings.eval()
 
