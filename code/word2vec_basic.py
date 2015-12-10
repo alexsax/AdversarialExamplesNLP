@@ -76,7 +76,7 @@ def read_data(filename):
 vocabulary_size = 30000
 if not existing_graph_path:
   words = read_data(filename)
-  words = words[0:128*10001]
+  words = words[0:128*100001]
   print('Data size', len(words))
   # Step 2: Build the dictionary and replace rare words with UNK token.
   def build_dataset(words):
@@ -270,7 +270,12 @@ with tf.Session(graph=graph) as session:
         real_grad = lossGrad.eval(feed_dict)
 
         # Pick a word that we want to turn everything into
-        adversarial_labels = np.array([valid_examples[2]]*batch_size)
+        randomLabelIndex = 0
+        while True:
+          randomLabelIndex = random.randInt(0, len(reverse_dictionary)) # Negative sampling
+          if not randomLabelIndex in train_labels:
+            break
+        adversarial_labels = np.array([randomLabelIndex]*batch_size)
         adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
         adversarial_feed_dict = {train_inputs : batch_inputs, train_labels : adversarial_labels}
 
@@ -473,31 +478,31 @@ with tf.Session(graph=graph) as session:
       _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
 
       average_loss += loss_val
-      if step % 5000 == 0:
+      if step % 500 == 0:
         if step > 0:
           average_loss = average_loss / 500
-        # The average loss is an estimate of the loss over the last 2000 batches.
+          # The average loss is an estimate of the loss over the last 2000 batches.
         print("Average loss at step ", step, " before: ", average_loss)
         average_loss = 0
 
-        if adversarial_examples != {}:
-          print("batch size is: ", batch_size)
-          for example_num in range(batch_size):
-            context, label, _ = adversarial_examples[example_num % len(adversarial_examples)] # Wrap around for the labels
-            for context_word_num, context_word in enumerate(context):
-              if example_num + context_word_num*batch_size >= batch_size:
-                break
-              batch_inputs[example_num + context_word_num*batch_size] = dictionary[context_word]
-              # print(example_num + context_word_num*batch_size)
-              batch_labels[example_num + context_word_num*batch_size] = dictionary[label] # I don't trust this
-            feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
-            _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
-            average_loss += loss_val
+          # if adversarial_examples != {}:
+          #   print("batch size is: ", batch_size)
+          #   for example_num in range(batch_size):
+          #     context, label, _ = adversarial_examples[example_num % len(adversarial_examples)] # Wrap around for the labels
+          #     for context_word_num, context_word in enumerate(context):
+          #       if example_num + context_word_num*batch_size >= batch_size:
+          #         break
+          #       batch_inputs[example_num + context_word_num*batch_size] = dictionary[context_word]
+          #       # print(example_num + context_word_num*batch_size)
+          #       batch_labels[example_num + context_word_num*batch_size] = dictionary[label] # I don't trust this
+          #     feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
+          #     _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
+          #     average_loss += loss_val
 
-          if step > 0:
-            average_loss = average_loss / 500
-            print("Average loss at step ", step, " after adversarial_examples: ", average_loss)
-            average_loss = 0
+            # if step > 0:
+            #   average_loss = average_loss / 500
+            #   print("Average loss at step ", step, " after adversarial_examples: ", average_loss)
+            #   average_loss = 0
       # note that this is expensive (~20% slowdown if computed every 500 steps)
       if step % 1000 == 0:
         def print_similarities_to_valid_examples():
@@ -514,10 +519,18 @@ with tf.Session(graph=graph) as session:
               log_str = "%s %s," % (log_str, close_word)
             print(log_str)
         print('saving session')
+        basename_os = '../data/'
+        filename_os = 'new_loss_function'
+        new_folder = 'New_Loss_FN/'
         if use_adversarial_examples:
-          saver.save(session, '../data/newloss-with-adversarial-examples-3', global_step=step)
+          saver.save(session, basename_os+filename_os, global_step=step)
         else:
-          saver.save(session, '../data/newloss-2', global_step=step)
+          saver.save(session, basename_os+filename_os, global_step=step)
+        
+        # Move the file to a safe folder
+        extension = '-'+str(step)
+        os.rename(basename_os+filename_os+extension, basename_os+new_folder+filename_os+extension)
+          
         print_similarities_to_valid_examples()
   final_embeddings = normalized_embeddings.eval()
 
