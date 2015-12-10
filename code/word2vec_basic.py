@@ -15,6 +15,7 @@ import zipfile
 import cPickle as pickle
 import argparse
 import sys
+import subprocess
 
 # Step 0: Command line parsing
 parser = argparse.ArgumentParser(description='Pocess the command line args.')
@@ -50,7 +51,7 @@ num_steps = 100001                      # number of training epochs
 
 print(use_adversarial_examples)
 # Variables that control generating adversarial examples
-min_number_modified = 12
+min_number_modified = 5
 step_size = 1
 initial_step_value = 1
 
@@ -243,10 +244,6 @@ with tf.Session(graph=graph) as session:
     print(generate_adversarial_examples)
 
     if generate_adversarial_examples:
-      # 1/1000th the size of a vector
-      # 1/1000th the JND of a vector
-      print(reverse_dictionary[valid_examples[2]])
-      print(embeddings[valid_examples[2], :].eval())
       # step_size = (np.linalg.norm(np.linalg.norm(embeddings.eval(), ord=-np.inf, axis = 1), ord=1)/vocabulary_size)/10
       print(step_size)
       print("Generating examples")
@@ -272,8 +269,8 @@ with tf.Session(graph=graph) as session:
         # Pick a word that we want to turn everything into
         randomLabelIndex = 0
         while True:
-          randomLabelIndex = random.randInt(0, len(reverse_dictionary)) # Negative sampling
-          if not randomLabelIndex in train_labels:
+          randomLabelIndex = random.randint(0, len(reverse_dictionary)) # Negative sampling
+          if not randomLabelIndex in batch_labels:
             break
         adversarial_labels = np.array([randomLabelIndex]*batch_size)
         adversarial_labels = np.reshape(adversarial_labels, [batch_size, 1])
@@ -339,10 +336,16 @@ with tf.Session(graph=graph) as session:
             output = [reverse_dictionary[word_idx] for word_idx in prior] + ["_"+reverse_dictionary[label]+"_"] + [reverse_dictionary[word_idx] for word_idx in post]
           return " ".join(output)
 
+        def not_all_same_word(context):
+          first_word = context[0]
+          for word in context:
+            if word != first_word: 
+              return True
+          return False
         # Check to see if the context predicts the correct label, only keep contexts that do not correctly
         # predict the correct label
         # Given the adversarial feed dict, returns all the ones successfully modified
-        def evaluate_successful_examples():
+        def evaluate_successful_examples(modified_context_and_label_tuples):
           o_embed, orig_results = session.run([embed, results], feed_dict=feed_dict)
           orig_sim_to_correct = [orig_results[i, batch_labels[i]][0] for i in xrange(batch_size)]
           orig_sim_to_adv = [orig_results[i, adversarial_labels[i]][0] for i in xrange(batch_size)]
@@ -351,25 +354,27 @@ with tf.Session(graph=graph) as session:
           sim_to_correct = [adv_results[i, batch_labels[i]][0] for i in xrange(batch_size)]
           sim_to_adv = [adv_results[i, adversarial_labels[i]][0] for i in xrange(batch_size)]
 
+
           # for i in xrange(batch_size):
           #   if(batch_inputs[i] == adversarial_word_vectors[i] and batch_inputs[i] == adversarial_word_vectors[i]): continue
           #   print()
           #   print((orig_sim_to_adv[i] < orig_sim_to_correct[i] and sim_to_adv[i] > sim_to_correct[i]))
           #   print(orig_sim_to_adv[i], "<", orig_sim_to_correct[i], " & ", sim_to_adv[i], ">", sim_to_correct[i])
-          correct = [(orig_sim_to_adv[i] < orig_sim_to_correct[i] and sim_to_adv[i] > sim_to_correct[i])
-                            for i in xrange(batch_size)]
+          correct = [(orig_sim_to_adv[i] < orig_sim_to_correct[i] and sim_to_adv[i] > sim_to_correct[i] and 
+                        not_all_same_word(modified_context_and_label_tuples[i][0]))
+                        for i in xrange(batch_size)]
           return correct
 
         def save_and_exit_if_min_number_of_examples_generated(modified_context_and_label_tuples):
-          correct = evaluate_successful_examples()
+          correct = evaluate_successful_examples(modified_context_and_label_tuples)
           adversarial_examples_to_save = [modified_context_and_label_tuples[i] for i, good in enumerate(correct) if good]
           if len(adversarial_examples_to_save) >= min_number_modified:        
             print("pickling " + str(len(adversarial_examples_to_save)) + " examples")
-            print("Target label: " + reverse_dictionary[valid_examples[2]])
-            for example_idx, example in enumerate(adversarial_examples_to_save): # Also save the randomly chosen target word
-               temp = list(example)
-               temp.append(reverse_dictionary[valid_examples[2]]) 
-               adversarial_examples_to_save[example_idx] = tuple(temp)
+            print("Target label: " + reverse_dictionary[randomLabelIndex])
+            # for example_idx, example in enumerate(adversarial_examples_to_save): # Also save the randomly chosen target word
+               # temp = list(example)
+               # temp.append(reverse_dictionary[randomLabelIndex]) 
+               # adversarial_examples_to_save[example_idx] = tuple(temp)
             # Check if there is an existing pickled array to save to:
             if use_adversarial_examples:
               previously_saved_examples = pickle.load(open(existing_auxiliary_graph_path + '-adversarial_examples', 'r')) 
@@ -404,7 +409,8 @@ with tf.Session(graph=graph) as session:
               original_words += [reverse_dictionary[int(batch_inputs[i + batch_size*j])]]
             for j in xrange(num_skips):
               new_words += [reverse_dictionary[int(adversarial_word_vectors[i + batch_size*j])]]
-            if original_words != new_words:
+
+            if original_words != new_words and not_all_same_word(new_words):
               number_of_examples_modified += 1
 
               print( context_to_str(original_words, label, already_string=True) +
@@ -413,7 +419,7 @@ with tf.Session(graph=graph) as session:
                       " | but predicts: " +
                       get_prediction(original_results, i) + " -> " +
                       get_prediction(adversarial_results, i))
-            modified_context_and_label_tuples += [(new_words, label)]
+            modified_context_and_label_tuples += [(new_words, label, original_words, reverse_dictionary[randomLabelIndex])]
           if number_of_examples_modified >= min_number_modified:
             print("done")
             # print(modified_context_and_label_tuples)
@@ -476,8 +482,8 @@ with tf.Session(graph=graph) as session:
       # We perform one update step by evaluating the optimizer op (including it
       # in the list of returned values for session.run()
       _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
-
       average_loss += loss_val
+
       if step % 500 == 0:
         if step > 0:
           average_loss = average_loss / 500
@@ -485,24 +491,31 @@ with tf.Session(graph=graph) as session:
         print("Average loss at step ", step, " before: ", average_loss)
         average_loss = 0
 
-          # if adversarial_examples != {}:
-          #   print("batch size is: ", batch_size)
-          #   for example_num in range(batch_size):
-          #     context, label, _ = adversarial_examples[example_num % len(adversarial_examples)] # Wrap around for the labels
-          #     for context_word_num, context_word in enumerate(context):
-          #       if example_num + context_word_num*batch_size >= batch_size:
-          #         break
-          #       batch_inputs[example_num + context_word_num*batch_size] = dictionary[context_word]
-          #       # print(example_num + context_word_num*batch_size)
-          #       batch_labels[example_num + context_word_num*batch_size] = dictionary[label] # I don't trust this
-          #     feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
-          #     _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
-          #     average_loss += loss_val
+      if adversarial_examples != {} and step % 500 == 0:
+          # generate new adversarial examples
+          print("start subprocess to generate adversarial examples")
+          os.remove('../data/text8-adversarial_examples')
+          subprocess.call('make_examples.sh "../data/baseline-100000"', shell=True)
+          print("finished running subproccess to generate adversarial examples")
 
-            # if step > 0:
-            #   average_loss = average_loss / 500
-            #   print("Average loss at step ", step, " after adversarial_examples: ", average_loss)
-            #   average_loss = 0
+          print("batch size is: ", batch_size)
+          for example_num in range(batch_size):
+            context, label, _, _ = adversarial_examples[example_num % len(adversarial_examples)] # Wrap around for the labels
+            for context_word_num, context_word in enumerate(context):
+              if example_num + context_word_num*batch_size >= batch_size:
+                break
+              batch_inputs[example_num + context_word_num*batch_size] = dictionary[context_word]
+              # print(example_num + context_word_num*batch_size)
+              batch_labels[example_num + context_word_num*batch_size] = dictionary[label] # I don't trust this
+            feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
+            _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
+            average_loss += loss_val
+
+            if step > 0:
+              print("Average loss at step ", step, " after adversarial_examples: ", average_loss)
+              average_loss = 0
+
+
       # note that this is expensive (~20% slowdown if computed every 500 steps)
       if step % 1000 == 0:
         def print_similarities_to_valid_examples():
@@ -520,8 +533,8 @@ with tf.Session(graph=graph) as session:
             print(log_str)
         print('saving session')
         basename_os = '../data/'
-        filename_os = 'new_loss_function'
-        new_folder = 'New_Loss_FN/'
+        filename_os = 'sample-test'
+        new_folder = 'example/'
         if use_adversarial_examples:
           saver.save(session, basename_os+filename_os, global_step=step)
         else:
