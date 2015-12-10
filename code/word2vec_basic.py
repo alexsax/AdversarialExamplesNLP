@@ -22,7 +22,10 @@ parser.add_argument('-m','--modelfile', default="", nargs='?',
                    help="relative path to the file which contains the model")
 parser.add_argument('-g', '--generate', dest='generate', action='store_true',
                       help="Generate adversarial examples")
+parser.add_argument('-a', '--use_adversarial_examples', dest='use_adversarial_examples', action='store_true',
+                      help="Use adversarial examples")
 parser.set_defaults(generate=False)
+parser.set_defaults(use_adversarial=False)
 
 
 parser.add_argument('-p', '--printlabels', dest="printlabels", action='store_true',
@@ -40,11 +43,14 @@ url = 'http://mattmahoney.net/dc/'
 existing_graph_path = args.modelfile if args.modelfile else ""#../data/baseline10000" # Previously stored models. Set to "" to retrain from scratc
 existing_auxiliary_graph_path = "../data/text8" # Where the data dictionaries are stored
 generate_adversarial_examples = args.generate   # whether to generate examples
+use_adversarial_examples = args.use_adversarial_examples   # whether to generate examples
 print_labels = args.printlabels
 num_steps = 100001                      # number of training epochs
 
+
+print(use_adversarial_examples)
 # Variables that control generating adversarial examples
-min_number_modified = 1
+min_number_modified = 12
 step_size = 1
 initial_step_value = 1
 
@@ -112,7 +118,7 @@ data_index = 0
 
 
 
-# Step 4: Function to generate a training batch for the skip-gram model.
+# Step 4: Function to generate a training batch for the CBOW model.
 def generate_batch(batch_size, num_skips, skip_window):
   global data_index
   assert batch_size % num_skips == 0
@@ -148,11 +154,7 @@ for i in range(8):
   print(batch[i], '->', labels[i, 0])
   print(get_context(batch[i]), '->', reverse_dictionary[labels[i, 0]])
 
-
-
-
-
-# Step 5: Build and train a skip-gram model.
+# Step 5: Build and train a CBOW model.
 batch_size = 128
 embedding_size = 128  # Dimension of the embedding vector.
 skip_window = 1       # How many words to consider left and right.
@@ -224,11 +226,6 @@ with graph.as_default():
   variables_to_save = {'embeddings':embeddings, 
                         'nce_weights' : nce_weights, 
                         'nce_biases' : nce_biases}
-                        # , 
-                        # 'reverse_dictionary' : reverse_dictionary,
-                        # 'dictionary' : dictionary,
-                        # 'data' : data
-                        # }
   saver = tf.train.Saver(variables_to_save)# Construct the neural network graph
 
 
@@ -364,7 +361,23 @@ with tf.Session(graph=graph) as session:
           if len(adversarial_examples_to_save) >= min_number_modified:        
             print("pickling " + str(len(adversarial_examples_to_save)) + " examples")
             print("Target label: " + reverse_dictionary[valid_examples[2]])
+            for example_idx, example in enumerate(adversarial_examples_to_save): # Also save the randomly chosen target word
+               temp = list(example)
+               temp.append(reverse_dictionary[valid_examples[2]]) 
+               adversarial_examples_to_save[example_idx] = tuple(temp)
+            # Check if there is an existing pickled array to save to:
+            if use_adversarial_examples:
+              previously_saved_examples = pickle.load(open(existing_auxiliary_graph_path + '-adversarial_examples', 'r')) 
+              # print("printing previously_saved_examples:")
+              # print(previously_saved_examples)
+              # print("printing new examples to save")
+              # print(adversarial_examples_to_save)
+              adversarial_examples_to_save += previously_saved_examples
+              # print("printing combination of new and old examples to save")
+              print(adversarial_examples_to_save)
+              print("you now have saved", len(adversarial_examples_to_save), " examples")
             pickle.dump(adversarial_examples_to_save, open(existing_auxiliary_graph_path + '-adversarial_examples', 'w+'))
+            print("done pickling")
             exit()
           else:
             print("only found " + str(len(adversarial_examples_to_save)) + " valid adversarial examples, continuing...")
@@ -438,6 +451,14 @@ with tf.Session(graph=graph) as session:
 
   else: #This section is for training a new neural network
     # We must initialize all variables before we use them.
+    adversarial_examples = {}
+    if use_adversarial_examples:
+      #open up the adversarial example dictionary if available
+      adversarial_examples = pickle.load(open(existing_auxiliary_graph_path + '-adversarial_examples', 'r')) 
+      print("printing adversarial_examples from storage")
+      print(adversarial_examples)
+    else: 
+      print("not loading adversarial_examples")
     tf.initialize_all_variables().run()
     print("Initialized")
     average_loss = 0
@@ -452,14 +473,33 @@ with tf.Session(graph=graph) as session:
       _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
 
       average_loss += loss_val
-      if step % 500 == 0:
+      if step % 5000 == 0:
         if step > 0:
           average_loss = average_loss / 500
         # The average loss is an estimate of the loss over the last 2000 batches.
-        print("Average loss at step ", step, ": ", average_loss)
+        print("Average loss at step ", step, " before: ", average_loss)
         average_loss = 0
+
+        if adversarial_examples != {}:
+          print("batch size is: ", batch_size)
+          for example_num in range(batch_size):
+            context, label, _ = adversarial_examples[example_num % len(adversarial_examples)] # Wrap around for the labels
+            for context_word_num, context_word in enumerate(context):
+              if example_num + context_word_num*batch_size >= batch_size:
+                break
+              batch_inputs[example_num + context_word_num*batch_size] = dictionary[context_word]
+              # print(example_num + context_word_num*batch_size)
+              batch_labels[example_num + context_word_num*batch_size] = dictionary[label] # I don't trust this
+            feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
+            _, loss_val = session.run([optimizer, new_loss], feed_dict=feed_dict)
+            average_loss += loss_val
+
+          if step > 0:
+            average_loss = average_loss / 500
+            print("Average loss at step ", step, " after adversarial_examples: ", average_loss)
+            average_loss = 0
       # note that this is expensive (~20% slowdown if computed every 500 steps)
-      if step % 10000 == 0:
+      if step % 1000 == 0:
         def print_similarities_to_valid_examples():
           sim = similarity.eval()
           for i in xrange(valid_size):
@@ -474,7 +514,10 @@ with tf.Session(graph=graph) as session:
               log_str = "%s %s," % (log_str, close_word)
             print(log_str)
         print('saving session')
-        saver.save(session, '../data/newloss', global_step=step)
+        if use_adversarial_examples:
+          saver.save(session, '../data/newloss-with-adversarial-examples-3', global_step=step)
+        else:
+          saver.save(session, '../data/newloss-2', global_step=step)
         print_similarities_to_valid_examples()
   final_embeddings = normalized_embeddings.eval()
 
